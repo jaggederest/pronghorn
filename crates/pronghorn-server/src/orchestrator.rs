@@ -160,25 +160,78 @@ async fn run_pipeline(
 }
 
 /// Adapter: receives AudioData packets, reorders via JitterBuffer, outputs AudioFrames.
+///
+/// Handles packet loss by skipping missing sequence numbers after a timeout.
+/// Flushes all buffered packets when the input stream closes.
 async fn jitter_to_frames(
     mut audio_rx: mpsc::Receiver<AudioData>,
     frame_tx: mpsc::Sender<AudioFrame>,
     playout_delay: u16,
 ) {
     let mut jb = JitterBuffer::new(playout_delay);
+    // Max consecutive pop() failures before we skip the missing packet
+    let max_skip_wait = 5u32; // ~5 packets worth of waiting (~100ms at 20ms/pkt)
+    let mut stall_count = 0u32;
+
     while let Some(data) = audio_rx.recv().await {
         jb.push(data);
-        while let Some(d) = jb.pop() {
-            if frame_tx
-                .send(AudioFrame::new(AudioFormat::SPEECH, d.payload))
-                .await
-                .is_err()
-            {
-                return; // downstream closed
+
+        loop {
+            match jb.pop() {
+                Some(d) => {
+                    stall_count = 0;
+                    if frame_tx
+                        .send(AudioFrame::new(AudioFormat::SPEECH, d.payload))
+                        .await
+                        .is_err()
+                    {
+                        return; // downstream closed
+                    }
+                }
+                None => {
+                    // No packet at next_seq. If we have buffered packets
+                    // beyond the gap, skip the missing one after waiting.
+                    if jb.is_playing() && jb.buffered() > 0 {
+                        stall_count += 1;
+                        if stall_count >= max_skip_wait {
+                            debug!(
+                                next_seq = ?jb.next_seq(),
+                                buffered = jb.buffered(),
+                                "skipping lost packet"
+                            );
+                            jb.skip();
+                            stall_count = 0;
+                            continue; // try popping again after skip
+                        }
+                    }
+                    break; // nothing more to pop right now
+                }
             }
         }
     }
-    // audio_rx closed → drop frame_tx → STT sees channel close
+
+    // Flush: skip gaps and drain all remaining buffered packets
+    loop {
+        match jb.pop() {
+            Some(d) => {
+                if frame_tx
+                    .send(AudioFrame::new(AudioFormat::SPEECH, d.payload))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            None => {
+                if jb.buffered() > 0 {
+                    jb.skip(); // skip the gap
+                    continue;
+                }
+                break; // truly empty
+            }
+        }
+    }
+    // drop frame_tx → STT sees channel close
 }
 
 #[cfg(test)]
