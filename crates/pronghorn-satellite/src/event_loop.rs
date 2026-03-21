@@ -89,6 +89,12 @@ pub async fn run_satellite(
                         // VAD: compute RMS of this frame
                         let rms = compute_rms(&frame.samples);
 
+                        // Log RMS every 50th frame (~1s) to help tune threshold
+                        let total_frames = speech_frames + silence_frames;
+                        if total_frames < 10 || total_frames.is_multiple_of(50) {
+                            debug!(rms = rms as u32, threshold = speech_threshold as u32, speech_frames, silence_frames, "VAD");
+                        }
+
                         // Hard timeout safety net
                         let timed_out = streaming_since
                             .is_some_and(|since| since.elapsed() > max_stream_duration);

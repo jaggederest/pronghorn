@@ -35,7 +35,7 @@ impl Default for SatelliteTransportConfig {
         Self {
             server_address: ([127, 0, 0, 1], 9999).into(),
             keepalive_interval_ms: 5_000,
-            speech_threshold: 500,
+            speech_threshold: 200,
             silence_duration_ms: 500,
             max_stream_duration_ms: 15_000,
             min_speech_ms: 300,
