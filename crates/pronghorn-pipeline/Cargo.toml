@@ -9,6 +9,7 @@ description = "Pipeline stage traits (STT, TTS, Intent) for Pronghorn voice prot
 [features]
 default = []
 onnx = ["dep:ort"]
+whisper = ["dep:rusty-whisper", "dep:hound", "dep:tempfile"]
 
 [dependencies]
 pronghorn-audio.workspace = true
@@ -21,6 +22,9 @@ bytes.workspace = true
 rubato.workspace = true
 audioadapter-buffers = "2"
 ort = { workspace = true, optional = true }
+rusty-whisper = { workspace = true, optional = true }
+hound = { version = "3.5", optional = true }
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 toml.workspace = true

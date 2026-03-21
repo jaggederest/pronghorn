@@ -31,8 +31,10 @@ pub enum SttBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WhisperConfig {
-    /// Path to the Whisper ONNX model file.
-    pub model_path: PathBuf,
+    /// Directory containing Whisper model files:
+    /// encoder_model.onnx, decoder_model_merged.onnx,
+    /// multilingual.tiktoken, positional_embedding.npz, mel_filters.npz
+    pub model_dir: PathBuf,
     /// Language code (e.g., "en").
     pub language: String,
 }
@@ -40,7 +42,7 @@ pub struct WhisperConfig {
 impl Default for WhisperConfig {
     fn default() -> Self {
         Self {
-            model_path: PathBuf::from("models/whisper-base.onnx"),
+            model_dir: PathBuf::from("models/whisper-base"),
             language: "en".into(),
         }
     }
@@ -118,14 +120,14 @@ mod tests {
 backend = "whisper"
 
 [stt.whisper]
-model_path = "models/whisper-small.onnx"
+model_dir = "models/whisper-small"
 language = "en"
 "#;
         let parsed: PipelineConfig = toml::from_str(toml_str).unwrap();
         assert!(matches!(parsed.stt.backend, SttBackend::Whisper));
         assert_eq!(
-            parsed.stt.whisper.model_path,
-            PathBuf::from("models/whisper-small.onnx")
+            parsed.stt.whisper.model_dir,
+            PathBuf::from("models/whisper-small")
         );
     }
 

@@ -8,20 +8,16 @@ description = "Wake word detection for Pronghorn voice protocol"
 
 [features]
 default = []
-# Rustpotter backend. Disabled by default because upstream v3.0.2 has a broken
-# candle-core dependency (rand 0.8/0.9 conflict). Enable once upstream PR #15
-# is merged: https://github.com/GiviMAD/rustpotter/pull/15
-rustpotter = ["dep:rustpotter"]
+# Rustpotter backend. Disabled — upstream has dep conflicts (candle-core/half).
+# The code in rustpotter_backend.rs is ready; re-add the dep when upstream is fixed.
+# Track: https://github.com/GiviMAD/rustpotter/pull/15
+rustpotter = []
 
 [dependencies]
 pronghorn-audio.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-# Pinned to Priler's fork which updates candle-core 0.2→0.9.
-# Needs one more fix for candle-core 0.9.2 DType exhaustiveness.
-# Track: https://github.com/GiviMAD/rustpotter/pull/15
-rustpotter = { git = "https://github.com/Priler/rustpotter", optional = true }
 
 [dev-dependencies]
 toml.workspace = true

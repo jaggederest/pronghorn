@@ -1,12 +1,15 @@
 # TODO
 
-## Whisper STT: mel spectrogram + ONNX inference
+## Whisper STT: fix tract/time dep chain for `--features whisper`
 
-The `WhisperStt` backend has audio collection and i16→f32 conversion wired up, but the actual inference pipeline is stubbed:
+`rusty-whisper` v0.1.3 is wired up behind the `whisper` feature flag. The code handles audio collection, temp WAV writing, and inference dispatch. However, `rusty-whisper` → `tract-onnx` → `time 0.3.23` doesn't compile on Rust 1.93+ (type inference issue in `time`).
 
-1. **Mel spectrogram preprocessing** — 80-bin log-mel spectrogram from 16kHz PCM. Requires FFT (rustfft is already in the dep tree) → mel filterbank → log scaling. Whisper uses 25ms window, 10ms hop.
-2. **ONNX encoder/decoder** — Load Whisper ONNX model via `ort`, run encoder on mel features, autoregressive decoder to produce token IDs.
-3. **Token decoding** — Map token IDs back to text. Need Whisper's tokenizer vocabulary.
+**Options to unblock:**
+1. Wait for `rusty-whisper` to update tract (tract 0.21+ should fix it)
+2. Build Whisper inference from scratch using `mel_spec` + `ort` (bypasses tract entirely)
+3. Fork `rusty-whisper` and bump tract
+
+The implementation in `whisper.rs` is complete — it just needs a working dep chain.
 
 File: `crates/pronghorn-pipeline/src/whisper.rs`
 
