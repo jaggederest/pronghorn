@@ -1,24 +1,16 @@
 # TODO
 
-## Whisper STT: fix tract/time dep chain for `--features whisper`
+## End-to-end testing with real models
 
-`rusty-whisper` v0.1.3 is wired up behind the `whisper` feature flag. The code handles audio collection, temp WAV writing, and inference dispatch. However, `rusty-whisper` → `tract-onnx` → `time 0.3.23` doesn't compile on Rust 1.93+ (type inference issue in `time`).
+Both inference backends are implemented and feature-gated. Next step is testing with real model files:
 
-**Options to unblock:**
-1. Wait for `rusty-whisper` to update tract (tract 0.21+ should fix it)
-2. Build Whisper inference from scratch using `mel_spec` + `ort` (bypasses tract entirely)
-3. Fork `rusty-whisper` and bump tract
+1. **Whisper STT** (`--features whisper`): Download whisper-base ONNX models from `onnx-community/whisper-base` on HuggingFace to `models/whisper-base/`
+2. **Kokoro TTS** (`--features kokoro`): Download Kokoro ONNX model + tokenizer from `onnx-community/Kokoro-82M-v1.0-ONNX` + voice files from `hexgrad/Kokoro-82M` to `models/kokoro/`
 
-The implementation in `whisper.rs` is complete — it just needs a working dep chain.
+## Future work
 
-File: `crates/pronghorn-pipeline/src/whisper.rs`
-
-## Kokoro TTS: phonemization + ONNX inference
-
-The `KokoroTts` backend has the 24→16kHz resampling pipeline wired up, but synthesis is stubbed:
-
-1. **Phonemization** — Convert text → phoneme token IDs. Kokoro expects pre-phonemized input. May need espeak-ng bindings or a pure-Rust phonemizer.
-2. **Voice embedding** — Load voice .npy/.bin files from the voices directory.
-3. **ONNX inference** — Run Kokoro model with token IDs + voice embedding → f32 audio at 24kHz.
-
-File: `crates/pronghorn-pipeline/src/kokoro.rs`
+- Real intent processing (beyond echo backend)
+- Home Assistant direct device API integration
+- mDNS satellite discovery
+- Barge-in support (interrupt TTS playback with new wake word)
+- Opus codec for compressed audio over WiFi

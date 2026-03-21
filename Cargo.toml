@@ -21,6 +21,7 @@ ort = "2.0.0-rc.12"
 rusty-whisper = { git = "https://github.com/jaggederest/rusty-whisper" }
 rubato = "1"
 cpal = "0.17"
+kokoroxide = { git = "https://github.com/jaggederest/kokoroxide" }
 pronghorn-audio = { path = "crates/pronghorn-audio" }
 pronghorn-pipeline = { path = "crates/pronghorn-pipeline" }
 pronghorn-satellite = { path = "crates/pronghorn-satellite" }

@@ -70,7 +70,9 @@ pub enum TtsBackend {
 pub struct KokoroConfig {
     /// Path to the Kokoro ONNX model file.
     pub model_path: PathBuf,
-    /// Path to the voice embedding file (.bin or .npy).
+    /// Path to the tokenizer JSON file.
+    pub tokenizer_path: PathBuf,
+    /// Path to voice .bin files directory.
     pub voices_path: PathBuf,
     /// Voice ID (e.g., "af_heart").
     pub voice: String,
@@ -79,7 +81,8 @@ pub struct KokoroConfig {
 impl Default for KokoroConfig {
     fn default() -> Self {
         Self {
-            model_path: PathBuf::from("models/kokoro.onnx"),
+            model_path: PathBuf::from("models/kokoro/model.onnx"),
+            tokenizer_path: PathBuf::from("models/kokoro/tokenizer.json"),
             voices_path: PathBuf::from("models/voices"),
             voice: "af_heart".into(),
         }
