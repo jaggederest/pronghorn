@@ -41,7 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    println!("Building wake word reference '{name}' from {} samples", wav_files.len());
+    println!(
+        "Building wake word reference '{name}' from {} samples",
+        wav_files.len()
+    );
     for f in &wav_files {
         println!("  {f}");
     }
@@ -51,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None, // use default threshold
         None, // use default avg_threshold
         wav_files,
-        42,   // mfcc_size (rustpotter default)
+        42, // mfcc_size (rustpotter default)
     )?;
 
     use rustpotter::WakewordSave;

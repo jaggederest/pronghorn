@@ -20,3 +20,7 @@ rustpotter = { git = "https://github.com/jaggederest/rustpotter", optional = tru
 [dev-dependencies]
 toml.workspace = true
 bytes.workspace = true
+
+[[example]]
+name = "build_wakeword"
+required-features = ["rustpotter"]

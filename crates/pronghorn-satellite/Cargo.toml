@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Pronghorn voice assistant satellite — wake word + audio streaming for Pi Zero 2"
 
+[features]
+default = []
+rustpotter = ["pronghorn-wake/rustpotter"]
+
 [dependencies]
 pronghorn-audio.workspace = true
 pronghorn-wake.workspace = true

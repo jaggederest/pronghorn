@@ -1,6 +1,3 @@
-# Pronghorn server configuration
-# Runs on the HA host or a capable server
-
 [audio]
 sample_rate = 16000
 channels = 1
@@ -12,20 +9,15 @@ jitter_buffer_delay = 3
 keepalive_interval_ms = 5000
 session_timeout_ms = 30000
 
-# Pipeline backends — "echo" for testing, "whisper"/"kokoro" for real inference
-# Real backends require: cargo build --features whisper,kokoro
-
 [pipeline.stt]
-backend = "echo"
-# backend = "whisper"
+backend = "whisper"
 
 [pipeline.stt.whisper]
 model_dir = "models/whisper-base"
 language = "en"
 
 [pipeline.tts]
-backend = "echo"
-# backend = "kokoro"
+backend = "kokoro"
 
 [pipeline.tts.kokoro]
 model_path = "models/kokoro/model_quantized.onnx"

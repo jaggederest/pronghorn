@@ -50,6 +50,8 @@ pub async fn run_satellite(
     let mut state = State::Idle;
     let mut sequence = 0u16;
     let mut timestamp = 0u32;
+    let mut streaming_since: Option<tokio::time::Instant> = None;
+    let streaming_timeout = Duration::from_secs(5); // auto-stop after 5s of streaming
 
     let keepalive_dur = Duration::from_millis(config.transport.keepalive_interval_ms);
     let mut keepalive_timer = tokio::time::interval(keepalive_dur);
@@ -67,11 +69,36 @@ pub async fn run_satellite(
                     State::Idle => {
                         ring.push(frame.clone());
                         if let Some(ref tx) = wake_frame_tx {
-                            // Non-blocking: if wake thread is busy, skip frame
-                            let _ = tx.try_send(frame);
+                            match tx.try_send(frame) {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    debug!("wake frame send failed: {e}");
+                                }
+                            }
+                        } else {
+                            debug!("no wake frame tx");
                         }
                     }
                     State::Streaming => {
+                        // Check streaming timeout (auto-stop, placeholder for VAD)
+                        if let Some(since) = streaming_since
+                            && since.elapsed() > streaming_timeout
+                        {
+                            info!("streaming timeout, sending StopListening");
+                            transport
+                                .send_to(
+                                    &Packet::Control(Control {
+                                        session_id,
+                                        control_type: ControlType::StopListening,
+                                        payload: Bytes::new(),
+                                    }),
+                                    server_addr,
+                                )
+                                .await?;
+                            state = State::Receiving;
+                            streaming_since = None;
+                            continue;
+                        }
                         let pkt = Packet::Audio(AudioData {
                             session_id,
                             sequence,
@@ -132,6 +159,7 @@ pub async fn run_satellite(
                     }
 
                     state = State::Streaming;
+                    streaming_since = Some(tokio::time::Instant::now());
                 }
             }
             // Branch 3: packet from server
@@ -218,9 +246,20 @@ fn spawn_wake_thread(config: &SatelliteConfig) -> Result<WakeChannels, Satellite
         .name("wake-detector".into())
         .spawn(move || {
             let mut det = detector;
+            let mut frame_count = 0u64;
+            tracing::info!("wake detector thread running");
             while let Some(frame) = wake_frame_rx.blocking_recv() {
+                frame_count += 1;
+                if frame_count.is_multiple_of(500) {
+                    tracing::debug!(frame_count, "wake detector processing frames");
+                }
                 match det.process_frame(&frame) {
                     Ok(Some(detection)) => {
+                        tracing::info!(
+                            wake_word = %detection.wake_word,
+                            score = detection.score,
+                            "WAKE WORD DETECTED on detector thread"
+                        );
                         let _ = wake_detect_tx.blocking_send(detection);
                         det.reset();
                     }
@@ -230,6 +269,7 @@ fn spawn_wake_thread(config: &SatelliteConfig) -> Result<WakeChannels, Satellite
                     }
                 }
             }
+            tracing::info!("wake detector thread exiting");
         })?;
 
     Ok((Some(wake_frame_tx), Some(wake_detect_rx)))

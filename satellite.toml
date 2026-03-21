@@ -1,6 +1,3 @@
-# Pronghorn satellite configuration
-# Runs on the satellite device (e.g., Pi Zero 2)
-
 [audio]
 sample_rate = 16000
 channels = 1
@@ -8,16 +5,17 @@ sample_size = 2
 preroll_frames = 15
 
 [wake]
-enabled = false
+enabled = true
 backend = "rustpotter"
 
 [wake.rustpotter]
-threshold = 0.5
-avg_threshold = 0.2
-eager = false
-min_scores = 5
-# [wake.rustpotter.wake_words]
-# hey_pronghorn = "models/hey_pronghorn.rpw"
+threshold = 0.4
+avg_threshold = 0.15
+eager = true
+min_scores = 3
+
+[wake.rustpotter.wake_words]
+hey_jarvis = "models/hey_jarvis.rpw"
 
 [transport]
 server_address = "127.0.0.1:9999"
