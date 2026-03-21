@@ -49,7 +49,15 @@ pub async fn run_satellite(
     let mut sequence = 0u16;
     let mut timestamp = 0u32;
     let mut streaming_since: Option<tokio::time::Instant> = None;
-    let streaming_timeout = Duration::from_secs(5); // auto-stop after 5s of streaming
+
+    // VAD state
+    let speech_threshold = config.transport.speech_threshold as f64;
+    let silence_frame_limit = (config.transport.silence_duration_ms / 20).max(1) as u32; // frames at 20ms each
+    let min_speech_frames = (config.transport.min_speech_ms / 20).max(1) as u32;
+    let max_stream_duration = Duration::from_millis(config.transport.max_stream_duration_ms);
+    let mut speech_detected = false;
+    let mut silence_frames = 0u32;
+    let mut speech_frames = 0u32;
 
     let keepalive_dur = Duration::from_millis(config.transport.keepalive_interval_ms);
     let mut keepalive_timer = tokio::time::interval(keepalive_dur);
@@ -78,11 +86,36 @@ pub async fn run_satellite(
                         }
                     }
                     State::Streaming => {
-                        // Check streaming timeout (auto-stop, placeholder for VAD)
-                        if let Some(since) = streaming_since
-                            && since.elapsed() > streaming_timeout
-                        {
-                            info!("streaming timeout, sending StopListening");
+                        // VAD: compute RMS of this frame
+                        let rms = compute_rms(&frame.samples);
+
+                        // Hard timeout safety net
+                        let timed_out = streaming_since
+                            .is_some_and(|since| since.elapsed() > max_stream_duration);
+
+                        // Track speech/silence
+                        if rms > speech_threshold {
+                            speech_detected = true;
+                            speech_frames += 1;
+                            silence_frames = 0;
+                        } else if speech_detected && speech_frames >= min_speech_frames {
+                            silence_frames += 1;
+                        }
+
+                        let vad_stop = speech_detected
+                            && speech_frames >= min_speech_frames
+                            && silence_frames >= silence_frame_limit;
+
+                        if vad_stop || timed_out {
+                            if vad_stop {
+                                info!(
+                                    speech_frames,
+                                    silence_frames,
+                                    "VAD: end of speech detected"
+                                );
+                            } else {
+                                info!("streaming timeout (hard cap)");
+                            }
                             transport
                                 .send_to(
                                     &Packet::Control(Control {
@@ -95,8 +128,12 @@ pub async fn run_satellite(
                                 .await?;
                             state = State::Receiving;
                             streaming_since = None;
+                            speech_detected = false;
+                            silence_frames = 0;
+                            speech_frames = 0;
                             continue;
                         }
+
                         let pkt = Packet::Audio(AudioData {
                             session_id,
                             sequence,
@@ -209,6 +246,22 @@ pub async fn run_satellite(
     }
 
     Ok(())
+}
+
+/// Compute RMS (root mean square) of i16 PCM samples in a frame's Bytes payload.
+fn compute_rms(samples: &bytes::Bytes) -> f64 {
+    let count = samples.len() / 2;
+    if count == 0 {
+        return 0.0;
+    }
+    let sum_sq: f64 = samples
+        .chunks_exact(2)
+        .map(|b| {
+            let s = i16::from_le_bytes([b[0], b[1]]) as f64;
+            s * s
+        })
+        .sum();
+    (sum_sq / count as f64).sqrt()
 }
 
 type WakeChannels = (

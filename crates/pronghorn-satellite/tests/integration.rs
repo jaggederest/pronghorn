@@ -74,6 +74,7 @@ async fn satellite_connects_and_handshakes() {
         transport: SatelliteTransportConfig {
             server_address: server_addr,
             keepalive_interval_ms: 60_000,
+            ..SatelliteTransportConfig::default()
         },
     };
 
@@ -145,6 +146,7 @@ async fn satellite_receives_tts_audio() {
         transport: SatelliteTransportConfig {
             server_address: server_addr,
             keepalive_interval_ms: 60_000,
+            ..SatelliteTransportConfig::default()
         },
     };
 

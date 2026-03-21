@@ -20,6 +20,14 @@ pub struct SatelliteTransportConfig {
     pub server_address: SocketAddr,
     /// Keepalive interval in milliseconds.
     pub keepalive_interval_ms: u64,
+    /// VAD: RMS threshold to consider as speech (i16 scale, 0-32768).
+    pub speech_threshold: u16,
+    /// VAD: milliseconds of silence after speech before auto-stopping.
+    pub silence_duration_ms: u64,
+    /// VAD: hard cap on streaming duration in milliseconds.
+    pub max_stream_duration_ms: u64,
+    /// VAD: minimum speech duration before silence detection kicks in.
+    pub min_speech_ms: u64,
 }
 
 impl Default for SatelliteTransportConfig {
@@ -27,6 +35,10 @@ impl Default for SatelliteTransportConfig {
         Self {
             server_address: ([127, 0, 0, 1], 9999).into(),
             keepalive_interval_ms: 5_000,
+            speech_threshold: 500,
+            silence_duration_ms: 500,
+            max_stream_duration_ms: 15_000,
+            min_speech_ms: 300,
         }
     }
 }
