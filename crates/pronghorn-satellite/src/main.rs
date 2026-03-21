@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use pronghorn_audio::AudioFrame;
+use pronghorn_satellite::audio_io;
 use pronghorn_satellite::config::SatelliteConfig;
 use pronghorn_satellite::event_loop;
 use tokio::sync::mpsc;
@@ -24,9 +25,29 @@ async fn main() {
         "config loaded"
     );
 
-    // TODO (Phase 6): replace with real mic capture and speaker playback
-    let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
-    let (speaker_tx, _speaker_rx) = mpsc::channel::<AudioFrame>(64);
+    // Audio channels
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+    let (speaker_tx, speaker_rx) = mpsc::channel::<AudioFrame>(64);
+
+    // Start audio capture (mic → audio_tx)
+    let _capture_stream = match audio_io::start_capture(audio_tx) {
+        Ok(stream) => Some(stream),
+        Err(e) => {
+            eprintln!("warning: failed to start audio capture: {e}");
+            eprintln!("running without mic input (no audio frames will be produced)");
+            None
+        }
+    };
+
+    // Start audio playback (speaker_rx → speaker)
+    let _playback_stream = match audio_io::start_playback(speaker_rx) {
+        Ok(stream) => Some(stream),
+        Err(e) => {
+            eprintln!("warning: failed to start audio playback: {e}");
+            eprintln!("running without speaker output (TTS audio will be discarded)");
+            None
+        }
+    };
 
     if let Err(e) = event_loop::run_satellite(config, audio_rx, speaker_tx).await {
         eprintln!("satellite error: {e}");

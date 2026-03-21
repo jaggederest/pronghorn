@@ -19,6 +19,7 @@ tracing-subscriber = "0.3"
 thiserror = "2"
 ort = "2.0.0-rc.12"
 rubato = "1"
+cpal = "0.17"
 pronghorn-audio = { path = "crates/pronghorn-audio" }
 pronghorn-pipeline = { path = "crates/pronghorn-pipeline" }
 pronghorn-satellite = { path = "crates/pronghorn-satellite" }
