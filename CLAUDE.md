@@ -14,7 +14,8 @@ cargo run                      # run the main binary
 
 ## Workspace Crates
 
-- `pronghorn-audio` — Audio types: format descriptors, PCM frames
+- `pronghorn-audio` — Audio types: format descriptors, PCM frames, ring buffer
+- `pronghorn-wake` — Wake word detection: pluggable trait, reframer, config (rustpotter backend behind feature flag)
 - `pronghorn-wire` — Wire protocol: packet codec, UDP transport, session management
 
 ## Architecture

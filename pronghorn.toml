@@ -9,6 +9,21 @@ sample_size = 2
 # Pre-roll ring buffer: 15 frames × 20ms = 300ms lookback
 preroll_frames = 15
 
+[wake]
+# Wake word detection (disabled by default — needs model files)
+enabled = false
+backend = "rustpotter"
+
+[wake.rustpotter]
+# Detection thresholds (0.0–1.0)
+threshold = 0.5
+avg_threshold = 0.2
+eager = false
+min_scores = 5
+# Wake word model/reference files:
+# [wake.rustpotter.wake_words]
+# hey_pronghorn = "models/hey_pronghorn.rpw"
+
 [transport]
 # Server bind address
 bind_address = "0.0.0.0:9999"

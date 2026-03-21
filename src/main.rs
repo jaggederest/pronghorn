@@ -23,4 +23,10 @@ async fn main() {
         jitter_delay = config.transport.jitter_buffer_delay,
         "config loaded"
     );
+
+    if config.wake.enabled {
+        info!(backend = ?config.wake.backend, "wake word detection enabled");
+    } else {
+        info!("wake word detection disabled (set [wake] enabled = true to activate)");
+    }
 }

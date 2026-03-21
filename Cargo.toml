@@ -17,6 +17,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 thiserror = "2"
 pronghorn-audio = { path = "crates/pronghorn-audio" }
+pronghorn-wake = { path = "crates/pronghorn-wake" }
 pronghorn-wire = { path = "crates/pronghorn-wire" }
 
 [package]
@@ -29,6 +30,7 @@ description = "Fast, low-latency voice assistant protocol with native UDP stream
 
 [dependencies]
 pronghorn-audio.workspace = true
+pronghorn-wake.workspace = true
 pronghorn-wire.workspace = true
 serde.workspace = true
 thiserror.workspace = true

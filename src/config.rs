@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use pronghorn_audio::AudioConfig;
+use pronghorn_wake::WakeConfig;
 use pronghorn_wire::TransportConfig;
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct PronghornConfig {
     pub audio: AudioConfig,
+    pub wake: WakeConfig,
     pub transport: TransportConfig,
 }
 
