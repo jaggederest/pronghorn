@@ -181,13 +181,32 @@ pub async fn run_satellite(
                         server_addr,
                     ).await?;
 
-                    // Discard pre-roll for now — it contains the wake word tail
-                    // which Whisper would transcribe as noise. Future: capture
-                    // more pre-roll, screen out wake-word-length prefix, send rest.
+                    // Send the tail of the pre-roll buffer. Most of the buffer
+                    // contains the wake word, so we only send the last few frames
+                    // which may capture the start of the actual command.
                     sequence = 0;
                     timestamp = 0;
-                    let _discarded = ring.drain();
-                    debug!(discarded_frames = _discarded.len(), "discarded pre-roll (contains wake word)");
+                    let preroll = ring.drain();
+                    let keep_frames = 6; // ~120ms of trailing audio
+                    let skip = preroll.len().saturating_sub(keep_frames);
+                    debug!(
+                        total_preroll = preroll.len(),
+                        skipped = skip,
+                        sending = preroll.len() - skip,
+                        "sending tail of pre-roll"
+                    );
+                    for frame in preroll.into_iter().skip(skip) {
+                        let pkt = Packet::Audio(AudioData {
+                            session_id,
+                            sequence,
+                            flags: pronghorn_wire::audio_flags::PRE_ROLL,
+                            timestamp,
+                            payload: frame.samples,
+                        });
+                        transport.send_to(&pkt, server_addr).await?;
+                        sequence = sequence.wrapping_add(1);
+                        timestamp = timestamp.wrapping_add(320);
+                    }
 
                     state = State::Streaming;
                     streaming_since = Some(tokio::time::Instant::now());
