@@ -10,4 +10,13 @@ pub enum ServerError {
 
     #[error(transparent)]
     Config(#[from] crate::config::ConfigError),
+
+    #[error("STT backend initialization failed: {0}")]
+    Stt(#[from] pronghorn_pipeline::SttError),
+
+    #[error("TTS backend initialization failed: {0}")]
+    Tts(#[from] pronghorn_pipeline::TtsError),
+
+    #[error("intent backend initialization failed: {0}")]
+    Intent(#[from] pronghorn_pipeline::IntentError),
 }

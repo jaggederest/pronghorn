@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 use pronghorn_audio::{AudioFormat, AudioFrame};
-use pronghorn_pipeline::config::{SttBackend, SttConfig, WhisperConfig};
+use pronghorn_pipeline::config::WhisperConfig;
 use pronghorn_pipeline::stt::{SpeechToText, Transcript};
 use pronghorn_pipeline::whisper::WhisperStt;
 use tokio::sync::mpsc;
@@ -31,7 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
-    println!("Samples: {} ({:.1}s)", samples.len(), samples.len() as f32 / spec.sample_rate as f32);
+    println!(
+        "Samples: {} ({:.1}s)",
+        samples.len(),
+        samples.len() as f32 / spec.sample_rate as f32
+    );
 
     // Create WhisperStt
     let config = WhisperConfig {
@@ -65,7 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(transcript) = transcript_rx.recv().await {
         println!(
             "[{}] {}",
-            if transcript.is_final { "FINAL" } else { "partial" },
+            if transcript.is_final {
+                "FINAL"
+            } else {
+                "partial"
+            },
             transcript.text
         );
     }

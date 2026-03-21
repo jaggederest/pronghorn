@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pronghorn_pipeline::{
+    IntentDispatch, SttDispatch, TtsDispatch, create_intent, create_stt, create_tts,
+};
 use pronghorn_wire::{
     ControlType, Keepalive, PROTOCOL_VERSION, Packet, SessionManager, SessionState, Transport,
     Welcome,
@@ -18,6 +21,16 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
     let addr = transport.local_addr()?;
     info!(bind = %addr, "server listening");
 
+    // Create pipeline backends once at startup (shared across all sessions)
+    info!("initializing pipeline backends...");
+    let stt = Arc::new(create_stt(&config.pipeline.stt)?);
+    info!(backend = ?config.pipeline.stt.backend, "STT ready");
+    let tts = Arc::new(create_tts(&config.pipeline.tts)?);
+    info!(backend = ?config.pipeline.tts.backend, "TTS ready");
+    let intent = Arc::new(create_intent(&config.pipeline.intent)?);
+    info!(backend = ?config.pipeline.intent.backend, "intent ready");
+
+    let jitter_delay = config.transport.jitter_buffer_delay;
     let mut sessions = SessionManager::new();
     let mut handles: HashMap<u32, SessionHandle> = HashMap::new();
 
@@ -30,6 +43,8 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
     keepalive_timer.tick().await;
     reap_timer.tick().await;
 
+    info!("server ready, waiting for connections");
+
     loop {
         tokio::select! {
             result = transport.recv_from() => {
@@ -37,7 +52,10 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
                 handle_packet(
                     packet,
                     addr,
-                    &config,
+                    &stt,
+                    &tts,
+                    &intent,
+                    jitter_delay,
                     &transport,
                     &mut sessions,
                     &mut handles,
@@ -63,10 +81,14 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_packet(
     packet: Packet,
     addr: std::net::SocketAddr,
-    config: &ServerConfig,
+    stt: &Arc<SttDispatch>,
+    tts: &Arc<TtsDispatch>,
+    intent: &Arc<IntentDispatch>,
+    jitter_delay: u16,
     transport: &Arc<Transport>,
     sessions: &mut SessionManager,
     handles: &mut HashMap<u32, SessionHandle>,
@@ -104,9 +126,12 @@ async fn handle_packet(
 
                         let handle = orchestrator::spawn_orchestrator(
                             ctrl.session_id,
-                            config,
+                            Arc::clone(stt),
+                            Arc::clone(tts),
+                            Arc::clone(intent),
                             Arc::clone(transport),
                             session.remote_addr,
+                            jitter_delay,
                         );
                         handles.insert(ctrl.session_id, handle);
                     }
@@ -114,11 +139,7 @@ async fn handle_packet(
                 ControlType::StopListening => {
                     info!(session_id = ctrl.session_id, "stop listening");
                     if let Some(handle) = handles.remove(&ctrl.session_id) {
-                        // Drop audio_tx to signal end-of-stream.
-                        // The orchestrator task continues to process remaining audio,
-                        // run intent, TTS, and send response back.
                         drop(handle.audio_tx);
-                        // Re-insert with a dummy sender so we can track the task
                         let (dummy_tx, _) = mpsc::channel(1);
                         handles.insert(
                             ctrl.session_id,
@@ -146,7 +167,6 @@ async fn handle_packet(
         }
         Packet::Keepalive(k) => {
             sessions.touch(k.session_id);
-            // Echo keepalive back
             transport
                 .send_to(
                     &Packet::Keepalive(Keepalive {
@@ -157,7 +177,6 @@ async fn handle_packet(
                 .await?;
         }
         Packet::Welcome(_) => {
-            // Server shouldn't receive Welcome
             warn!(%addr, "unexpected Welcome packet");
         }
     }
@@ -165,13 +184,9 @@ async fn handle_packet(
 }
 
 async fn send_keepalives(transport: &Transport, sessions: &SessionManager) {
-    // SessionManager doesn't expose an iterator, so we track addresses separately.
-    // For now, keepalives are sent in response to received keepalives (echo pattern).
-    // TODO: proactive keepalives once SessionManager exposes iteration
     let _ = (transport, sessions);
 }
 
-/// Check for orchestrator tasks that have completed and clean up.
 fn collect_completed(handles: &mut HashMap<u32, SessionHandle>, sessions: &mut SessionManager) {
     let completed: Vec<u32> = handles
         .iter()

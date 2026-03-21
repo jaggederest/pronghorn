@@ -4,14 +4,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 use pronghorn_audio::{AudioFormat, AudioFrame};
 use pronghorn_pipeline::{
-    EchoIntent, EchoStt, EchoTts, IntentProcessor, SpeechToText, TextToSpeech, Transcript,
+    IntentDispatch, IntentProcessor, SpeechToText, SttDispatch, TextToSpeech, Transcript,
+    TtsDispatch,
 };
 use pronghorn_wire::{AudioData, Control, ControlType, JitterBuffer, Packet, Transport};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
-
-use crate::config::ServerConfig;
 
 /// Handle to an active session's pipeline. Held by the event loop.
 pub struct SessionHandle {
@@ -27,18 +26,23 @@ pub struct SessionHandle {
 /// Wires: AudioData → JitterBuffer → STT → Intent → TTS → send back
 pub fn spawn_orchestrator(
     session_id: u32,
-    config: &ServerConfig,
+    stt: Arc<SttDispatch>,
+    tts: Arc<TtsDispatch>,
+    intent: Arc<IntentDispatch>,
     transport: Arc<Transport>,
     remote_addr: SocketAddr,
+    jitter_delay: u16,
 ) -> SessionHandle {
     let (audio_data_tx, audio_data_rx) = mpsc::channel::<AudioData>(64);
-    let jitter_delay = config.transport.jitter_buffer_delay;
 
     let task = tokio::spawn(async move {
         if let Err(e) = run_pipeline(
             session_id,
             jitter_delay,
             audio_data_rx,
+            stt,
+            tts,
+            intent,
             transport,
             remote_addr,
         )
@@ -54,10 +58,14 @@ pub fn spawn_orchestrator(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_pipeline(
     session_id: u32,
     jitter_delay: u16,
     audio_data_rx: mpsc::Receiver<AudioData>,
+    stt: Arc<SttDispatch>,
+    tts: Arc<TtsDispatch>,
+    intent: Arc<IntentDispatch>,
     transport: Arc<Transport>,
     remote_addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -73,10 +81,10 @@ async fn run_pipeline(
         jitter_delay,
     ));
 
-    // Task: STT
-    let stt = EchoStt;
+    // Task: STT (shared backend via Arc)
+    let stt_clone = Arc::clone(&stt);
     let stt_handle =
-        tokio::spawn(async move { stt.transcribe(audio_frame_rx, transcript_tx).await });
+        tokio::spawn(async move { stt_clone.transcribe(audio_frame_rx, transcript_tx).await });
 
     // Wait for final transcript
     let mut final_text = String::new();
@@ -98,7 +106,6 @@ async fn run_pipeline(
     }
 
     // Intent processing
-    let intent = EchoIntent;
     let response = intent.process(&final_text).await?;
     info!(session_id, reply = %response.reply_text, "intent response");
 
@@ -114,11 +121,12 @@ async fn run_pipeline(
         )
         .await?;
 
-    // TTS: synthesize and stream back
+    // TTS: synthesize and stream back (shared backend via Arc)
     let (tts_audio_tx, mut tts_audio_rx) = mpsc::channel::<AudioFrame>(64);
-    let tts = EchoTts;
+    let tts_clone = Arc::clone(&tts);
+    let reply_text = response.reply_text.clone();
     let tts_handle =
-        tokio::spawn(async move { tts.synthesize(&response.reply_text, tts_audio_tx).await });
+        tokio::spawn(async move { tts_clone.synthesize(&reply_text, tts_audio_tx).await });
 
     let mut seq = 0u16;
     while let Some(frame) = tts_audio_rx.recv().await {

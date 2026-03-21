@@ -12,13 +12,26 @@ jitter_buffer_delay = 3
 keepalive_interval_ms = 5000
 session_timeout_ms = 30000
 
+# Pipeline backends — "echo" for testing, "whisper"/"kokoro" for real inference
+# Real backends require: cargo build --features whisper,kokoro
+
 [pipeline.stt]
 backend = "echo"
-# url = "ws://localhost:9090"
+# backend = "whisper"
+
+[pipeline.stt.whisper]
+model_dir = "models/whisper-base"
+language = "en"
 
 [pipeline.tts]
 backend = "echo"
-# url = "http://localhost:5500"
+# backend = "kokoro"
+
+[pipeline.tts.kokoro]
+model_path = "models/kokoro/model_quantized.onnx"
+tokenizer_path = "models/kokoro/tokenizer.json"
+voices_path = "models/kokoro/voices"
+voice = "bm_daniel"
 
 [pipeline.intent]
 backend = "echo"

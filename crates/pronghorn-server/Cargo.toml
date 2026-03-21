@@ -6,6 +6,11 @@ license.workspace = true
 repository.workspace = true
 description = "Pronghorn voice assistant server — pipeline orchestration for STT, intent, and TTS"
 
+[features]
+default = []
+whisper = ["pronghorn-pipeline/whisper"]
+kokoro = ["pronghorn-pipeline/kokoro"]
+
 [dependencies]
 pronghorn-audio.workspace = true
 pronghorn-pipeline.workspace = true
