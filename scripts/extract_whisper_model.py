@@ -90,6 +90,7 @@ def main():
             "audio_features": {0: "batch"},
         },
         opset_version=14,
+        dynamo=False,
     )
     print(f"Saved {encoder_dst}")
 
@@ -253,6 +254,7 @@ def main():
         output_names=output_names,
         dynamic_axes=dynamic_axes,
         opset_version=14,
+        dynamo=False,
     )
     print(f"Saved {decoder_dst}")
 

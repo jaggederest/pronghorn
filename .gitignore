@@ -1,4 +1,6 @@
 /target
+/models/
+/.venv/
 *.swp
 *.swo
 *~
