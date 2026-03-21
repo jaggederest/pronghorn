@@ -232,11 +232,9 @@ pub async fn run_satellite(
                     Packet::Audio(_) => {
                         debug!("ignoring audio in state {:?}", state);
                     }
-                    Packet::Keepalive(k) => {
-                        transport.send_to(
-                            &Packet::Keepalive(Keepalive { session_id: k.session_id }),
-                            server_addr,
-                        ).await?;
+                    Packet::Keepalive(_) => {
+                        // Server echoed our keepalive — connection is alive.
+                        // Do NOT echo back (would create infinite ping-pong).
                     }
                     _ => {}
                 }
