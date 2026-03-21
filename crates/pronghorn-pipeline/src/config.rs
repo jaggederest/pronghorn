@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// Aggregated pipeline configuration — lives under `[pipeline]` in server.toml.
@@ -13,8 +15,8 @@ pub struct PipelineConfig {
 #[serde(default)]
 pub struct SttConfig {
     pub backend: SttBackend,
-    /// URL for the STT service (e.g., "ws://localhost:9090").
-    pub url: String,
+    /// Whisper-specific configuration.
+    pub whisper: WhisperConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -22,15 +24,34 @@ pub struct SttConfig {
 pub enum SttBackend {
     #[default]
     Echo,
-    FasterWhisper,
+    Whisper,
+}
+
+/// Configuration for the Whisper ONNX STT backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WhisperConfig {
+    /// Path to the Whisper ONNX model file.
+    pub model_path: PathBuf,
+    /// Language code (e.g., "en").
+    pub language: String,
+}
+
+impl Default for WhisperConfig {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::from("models/whisper-base.onnx"),
+            language: "en".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TtsConfig {
     pub backend: TtsBackend,
-    /// URL for the TTS service (e.g., "http://localhost:5500").
-    pub url: String,
+    /// Kokoro-specific configuration.
+    pub kokoro: KokoroConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -38,7 +59,29 @@ pub struct TtsConfig {
 pub enum TtsBackend {
     #[default]
     Echo,
-    Piper,
+    Kokoro,
+}
+
+/// Configuration for the Kokoro ONNX TTS backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KokoroConfig {
+    /// Path to the Kokoro ONNX model file.
+    pub model_path: PathBuf,
+    /// Path to the voice embedding file (.bin or .npy).
+    pub voices_path: PathBuf,
+    /// Voice ID (e.g., "af_heart").
+    pub voice: String,
+}
+
+impl Default for KokoroConfig {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::from("models/kokoro.onnx"),
+            voices_path: PathBuf::from("models/voices"),
+            voice: "af_heart".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -69,17 +112,44 @@ mod tests {
     }
 
     #[test]
-    fn partial_toml_uses_defaults() {
+    fn whisper_config_from_toml() {
         let toml_str = r#"
 [stt]
-backend = "faster-whisper"
-url = "ws://localhost:9090"
+backend = "whisper"
+
+[stt.whisper]
+model_path = "models/whisper-small.onnx"
+language = "en"
 "#;
         let parsed: PipelineConfig = toml::from_str(toml_str).unwrap();
-        assert!(matches!(parsed.stt.backend, SttBackend::FasterWhisper));
-        assert_eq!(parsed.stt.url, "ws://localhost:9090");
-        // TTS and intent defaulted
+        assert!(matches!(parsed.stt.backend, SttBackend::Whisper));
+        assert_eq!(
+            parsed.stt.whisper.model_path,
+            PathBuf::from("models/whisper-small.onnx")
+        );
+    }
+
+    #[test]
+    fn kokoro_config_from_toml() {
+        let toml_str = r#"
+[tts]
+backend = "kokoro"
+
+[tts.kokoro]
+model_path = "models/kokoro.onnx"
+voice = "bf_emma"
+"#;
+        let parsed: PipelineConfig = toml::from_str(toml_str).unwrap();
+        assert!(matches!(parsed.tts.backend, TtsBackend::Kokoro));
+        assert_eq!(parsed.tts.kokoro.voice, "bf_emma");
+    }
+
+    #[test]
+    fn partial_toml_uses_defaults() {
+        let parsed: PipelineConfig = toml::from_str("").unwrap();
+        assert!(matches!(parsed.stt.backend, SttBackend::Echo));
         assert!(matches!(parsed.tts.backend, TtsBackend::Echo));
-        assert!(matches!(parsed.intent.backend, IntentBackend::Echo));
+        assert_eq!(parsed.stt.whisper.language, "en");
+        assert_eq!(parsed.tts.kokoro.voice, "af_heart");
     }
 }
