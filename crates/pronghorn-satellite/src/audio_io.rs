@@ -1,14 +1,18 @@
+use std::sync::{Arc, Mutex};
+
+use audioadapter_buffers::direct::InterleavedSlice;
 use bytes::Bytes;
+use cpal::Stream;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, Stream};
 use pronghorn_audio::{AudioFormat, AudioFrame};
+use rubato::{Fft, FixedSync, Resampler as _};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
 /// Start capturing audio from the default input device.
 ///
-/// Captures at the device's native rate and resamples to 16kHz mono i16.
-/// Returns a `Stream` (must be kept alive) and audio frames are sent to `audio_tx`.
+/// Captures at the device's native rate/format, resamples to 16kHz mono f32
+/// via rubato (high-quality FFT-based), converts to i16 PCM AudioFrames.
 pub fn start_capture(audio_tx: mpsc::Sender<AudioFrame>) -> Result<Stream, AudioIoError> {
     let host = cpal::default_host();
     let device = host
@@ -17,54 +21,53 @@ pub fn start_capture(audio_tx: mpsc::Sender<AudioFrame>) -> Result<Stream, Audio
 
     info!(device = ?device.description(), "using input device");
 
-    // Try 16kHz first, fall back to device default
-    let config = match find_compatible_input_config(&device) {
-        Some(cfg) => cfg,
-        None => {
-            // Use the device's default config and resample
-            let default = device.default_input_config().map_err(|_| {
-                AudioIoError::Stream(cpal::BuildStreamError::StreamConfigNotSupported)
-            })?;
-            info!(
-                sample_rate = default.sample_rate(),
-                channels = default.channels(),
-                format = ?default.sample_format(),
-                "using device default config (will resample to 16kHz)"
-            );
-            cpal::StreamConfig {
-                channels: default.channels(),
-                sample_rate: default.sample_rate(),
-                buffer_size: cpal::BufferSize::Default,
-            }
-        }
-    };
+    let default = device
+        .default_input_config()
+        .map_err(|_| AudioIoError::Stream(cpal::BuildStreamError::StreamConfigNotSupported))?;
 
-    let native_rate = config.sample_rate;
-    let native_channels = config.channels;
+    let native_rate = default.sample_rate();
+    let native_channels = default.channels();
+
     info!(
         sample_rate = native_rate,
         channels = native_channels,
-        "capture config"
+        format = ?default.sample_format(),
+        "capture: using device native config, resampling to 16kHz"
     );
 
-    let needs_resample = native_rate != 16_000;
-    let needs_downmix = native_channels > 1;
-
-    // Simple integer decimation ratio (e.g., 48000/16000 = 3)
-    let decimate_ratio = if needs_resample {
-        native_rate / 16_000
-    } else {
-        1
+    let config = cpal::StreamConfig {
+        channels: native_channels,
+        sample_rate: native_rate,
+        buffer_size: cpal::BufferSize::Default,
     };
 
-    // Accumulator for partial frames across callbacks
-    let accumulator = std::sync::Arc::new(std::sync::Mutex::new(Vec::<i16>::with_capacity(640)));
+    // Shared state: accumulator + resampler
+    let needs_resample = native_rate != 16_000;
+    let resampler = if needs_resample {
+        // rubato chunk size: 20ms at native rate
+        let chunk_size = (native_rate as usize * 20) / 1000;
+        Some(Arc::new(Mutex::new(
+            Fft::<f32>::new(
+                native_rate as usize,
+                16_000,
+                chunk_size,
+                1, // sub_chunks
+                1, // mono (we downmix first)
+                FixedSync::Input,
+            )
+            .expect("valid resampler params"),
+        )))
+    } else {
+        None
+    };
+
+    let accumulator = Arc::new(Mutex::new(Vec::<f32>::with_capacity(4096)));
 
     let stream = device.build_input_stream(
         &config,
         move |data: &[f32], _info: &cpal::InputCallbackInfo| {
-            // Convert to mono
-            let mono_samples: Vec<f32> = if needs_downmix {
+            // Step 1: Downmix to mono
+            let mono: Vec<f32> = if native_channels > 1 {
                 data.chunks(native_channels as usize)
                     .map(|ch| ch.iter().sum::<f32>() / native_channels as f32)
                     .collect()
@@ -72,31 +75,64 @@ pub fn start_capture(audio_tx: mpsc::Sender<AudioFrame>) -> Result<Stream, Audio
                 data.to_vec()
             };
 
-            // Decimate to 16kHz
-            let resampled: Vec<i16> = if needs_resample {
-                mono_samples
-                    .iter()
-                    .step_by(decimate_ratio as usize)
-                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                    .collect()
+            // Step 2: Resample to 16kHz (or pass through if already 16kHz)
+            let resampled = if let Some(ref rs) = resampler {
+                let mut acc = accumulator.lock().unwrap();
+                acc.extend_from_slice(&mono);
+
+                let mut rs = rs.lock().unwrap();
+                let chunk_size = rs.input_frames_max();
+                let mut output = Vec::new();
+
+                while acc.len() >= chunk_size {
+                    let chunk = &acc[..chunk_size];
+                    let adapter =
+                        InterleavedSlice::new(chunk, 1, chunk.len()).unwrap();
+                    match rs.process(&adapter, 0, None) {
+                        Ok(result) => {
+                            output.extend_from_slice(&result.take_data());
+                        }
+                        Err(e) => {
+                            error!("capture resample error: {e}");
+                            break;
+                        }
+                    }
+                    acc.drain(..chunk_size);
+                }
+
+                output
             } else {
-                mono_samples
-                    .iter()
-                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                    .collect()
+                mono
             };
 
-            // Accumulate and emit 20ms frames (320 samples at 16kHz)
+            // Step 3: Convert f32 → i16 PCM and chunk into 20ms frames (320 samples)
             let frame_samples = 320;
-            let mut acc = accumulator.lock().unwrap();
-            acc.extend_from_slice(&resampled);
+            // Use a static accumulator for partial frames across callbacks
+            // (reusing the same pattern — accumulate resampled i16 samples)
+            let samples_i16: Vec<i16> = resampled
+                .iter()
+                .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                .collect();
 
-            while acc.len() >= frame_samples {
-                let chunk: Vec<i16> = acc.drain(..frame_samples).collect();
-                let pcm_bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
-                let frame = AudioFrame::new(AudioFormat::SPEECH, Bytes::from(pcm_bytes));
-                let _ = audio_tx.try_send(frame);
+            // We need to accumulate across callbacks for framing
+            // For simplicity, use a thread-local buffer
+            thread_local! {
+                static FRAME_BUF: std::cell::RefCell<Vec<i16>> = std::cell::RefCell::new(Vec::with_capacity(640));
             }
+
+            FRAME_BUF.with(|buf| {
+                let mut buf = buf.borrow_mut();
+                buf.extend_from_slice(&samples_i16);
+
+                while buf.len() >= frame_samples {
+                    let chunk: Vec<i16> = buf.drain(..frame_samples).collect();
+                    let pcm_bytes: Vec<u8> =
+                        chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
+                    let frame =
+                        AudioFrame::new(AudioFormat::SPEECH, Bytes::from(pcm_bytes));
+                    let _ = audio_tx.try_send(frame);
+                }
+            });
         },
         move |err| {
             error!("capture stream error: {err}");
@@ -111,7 +147,8 @@ pub fn start_capture(audio_tx: mpsc::Sender<AudioFrame>) -> Result<Stream, Audio
 
 /// Start playing audio to the default output device.
 ///
-/// Returns a `Stream` (must be kept alive). Audio frames from `speaker_rx` are played.
+/// Receives 16kHz mono i16 AudioFrames, upsamples to the device's native
+/// rate via rubato, expands to device channel count.
 pub fn start_playback(mut speaker_rx: mpsc::Receiver<AudioFrame>) -> Result<Stream, AudioIoError> {
     let host = cpal::default_host();
     let device = host
@@ -120,20 +157,12 @@ pub fn start_playback(mut speaker_rx: mpsc::Receiver<AudioFrame>) -> Result<Stre
 
     info!(device = ?device.description(), "using output device");
 
-    // Use device default and upsample from 16kHz if needed
     let default = device
         .default_output_config()
         .map_err(|_| AudioIoError::Stream(cpal::BuildStreamError::StreamConfigNotSupported))?;
 
-    let config = cpal::StreamConfig {
-        channels: default.channels(),
-        sample_rate: default.sample_rate(),
-        buffer_size: cpal::BufferSize::Default,
-    };
-
-    let output_rate = config.sample_rate;
-    let output_channels = config.channels;
-    let upsample_ratio = output_rate / 16_000;
+    let output_rate = default.sample_rate();
+    let output_channels = default.channels();
 
     info!(
         sample_rate = output_rate,
@@ -141,33 +170,87 @@ pub fn start_playback(mut speaker_rx: mpsc::Receiver<AudioFrame>) -> Result<Stre
         "playback config"
     );
 
-    // Buffer for samples waiting to be played
+    let config = cpal::StreamConfig {
+        channels: output_channels,
+        sample_rate: output_rate,
+        buffer_size: cpal::BufferSize::Default,
+    };
+
+    // Resampler: 16kHz → native output rate
+    let needs_resample = output_rate != 16_000;
+    let resampler = if needs_resample {
+        let chunk_size = (16_000usize * 20) / 1000; // 20ms at 16kHz = 320
+        Some(Arc::new(Mutex::new(
+            Fft::<f32>::new(
+                16_000,
+                output_rate as usize,
+                chunk_size,
+                1,
+                1, // mono, expand channels after
+                FixedSync::Input,
+            )
+            .expect("valid playback resampler params"),
+        )))
+    } else {
+        None
+    };
+
+    // Channel for resampled+expanded f32 samples ready for playback
     let (sample_tx, sample_rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
-    // Spawn a task to convert AudioFrames → f32 sample buffers (upsampled + channel-expanded)
+    // Task: receive AudioFrames → resample → expand channels → send to playback
+    let rs_clone = resampler.clone();
     tokio::spawn(async move {
         while let Some(frame) = speaker_rx.recv().await {
-            let samples_i16: Vec<i16> = frame
+            // Convert i16 → f32 mono
+            let mono: Vec<f32> = frame
                 .samples
                 .chunks_exact(2)
-                .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
                 .collect();
 
-            // Upsample and expand channels
-            let mut output = Vec::with_capacity(
-                samples_i16.len() * upsample_ratio as usize * output_channels as usize,
-            );
-            for &s in &samples_i16 {
-                let f = s as f32 / 32768.0;
-                // Repeat sample for upsampling (simple, not ideal but functional)
-                for _ in 0..upsample_ratio {
-                    for _ in 0..output_channels {
-                        output.push(f);
+            // Resample 16kHz → native rate
+            let resampled = if let Some(ref rs) = rs_clone {
+                let mut rs = rs.lock().unwrap();
+                let chunk_size = rs.input_frames_max();
+                let mut output = Vec::new();
+
+                // Pad if needed (last chunk)
+                let mut input = mono;
+                if input.len() < chunk_size {
+                    input.resize(chunk_size, 0.0);
+                }
+
+                for chunk in input.chunks(chunk_size) {
+                    let mut padded;
+                    let data = if chunk.len() < chunk_size {
+                        padded = chunk.to_vec();
+                        padded.resize(chunk_size, 0.0);
+                        &padded[..]
+                    } else {
+                        chunk
+                    };
+                    let adapter = InterleavedSlice::new(data, 1, data.len()).unwrap();
+                    match rs.process(&adapter, 0, None) {
+                        Ok(result) => output.extend_from_slice(&result.take_data()),
+                        Err(e) => {
+                            tracing::error!("playback resample error: {e}");
+                            break;
+                        }
                     }
                 }
-            }
+                output
+            } else {
+                mono
+            };
 
-            if sample_tx.send(output).is_err() {
+            // Expand mono → device channels (duplicate samples)
+            let expanded: Vec<f32> = resampled
+                .iter()
+                .flat_map(|&s| std::iter::repeat_n(s, output_channels as usize))
+                .collect();
+
+            if sample_tx.send(expanded).is_err() {
                 break;
             }
         }
@@ -180,7 +263,7 @@ pub fn start_playback(mut speaker_rx: mpsc::Receiver<AudioFrame>) -> Result<Stre
         move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
             let mut written = 0;
 
-            // Drain pending samples first
+            // Drain pending
             while written < data.len() && !pending.is_empty() {
                 data[written] = pending.remove(0);
                 written += 1;
@@ -217,21 +300,6 @@ pub fn start_playback(mut speaker_rx: mpsc::Receiver<AudioFrame>) -> Result<Stre
     stream.play()?;
     info!("audio playback started");
     Ok(stream)
-}
-
-/// Try to find an input config that matches 16kHz mono i16.
-fn find_compatible_input_config(device: &cpal::Device) -> Option<cpal::StreamConfig> {
-    let configs = device.supported_input_configs().ok()?;
-    for cfg in configs {
-        if cfg.channels() == 1
-            && cfg.min_sample_rate() <= 16_000
-            && cfg.max_sample_rate() >= 16_000
-            && cfg.sample_format() == SampleFormat::I16
-        {
-            return Some(cfg.with_sample_rate(16_000).into());
-        }
-    }
-    None
 }
 
 #[derive(Debug, thiserror::Error)]

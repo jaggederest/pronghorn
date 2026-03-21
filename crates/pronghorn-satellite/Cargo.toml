@@ -22,6 +22,8 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 cpal.workspace = true
+rubato.workspace = true
+audioadapter-buffers = "2"
 
 [dev-dependencies]
 pronghorn-pipeline.workspace = true

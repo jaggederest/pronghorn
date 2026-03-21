@@ -2541,6 +2541,7 @@ dependencies = [
 name = "pronghorn-satellite"
 version = "0.1.0"
 dependencies = [
+ "audioadapter-buffers",
  "bytes",
  "cpal",
  "pronghorn-audio",
@@ -2548,6 +2549,7 @@ dependencies = [
  "pronghorn-server",
  "pronghorn-wake",
  "pronghorn-wire",
+ "rubato 1.0.1",
  "serde",
  "thiserror 2.0.18",
  "tokio",
