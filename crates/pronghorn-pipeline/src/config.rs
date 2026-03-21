@@ -71,8 +71,10 @@ impl Default for WhisperConfig {
 #[serde(default)]
 pub struct TtsConfig {
     pub backend: TtsBackend,
-    /// Kokoro-specific configuration.
+    /// Kokoro via kokoroxide (standalone ort).
     pub kokoro: KokoroConfig,
+    /// Kokoro via sherpa-rs (shared ort with STT).
+    pub sherpa_kokoro: SherpaKokoroConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,6 +83,29 @@ pub enum TtsBackend {
     #[default]
     Echo,
     Kokoro,
+    SherpaKokoro,
+}
+
+/// Configuration for Kokoro TTS via sherpa-rs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SherpaKokoroConfig {
+    /// Directory containing model.onnx, voices.bin, tokens.txt, espeak-ng-data/
+    pub model_dir: PathBuf,
+    /// Speaker ID (0-10 for kokoro-en-v0_19).
+    pub speaker_id: i32,
+    /// Speech speed multiplier.
+    pub speed: f32,
+}
+
+impl Default for SherpaKokoroConfig {
+    fn default() -> Self {
+        Self {
+            model_dir: PathBuf::from("models/sherpa-kokoro"),
+            speaker_id: 0,
+            speed: 1.0,
+        }
+    }
 }
 
 /// Configuration for the Kokoro ONNX TTS backend.

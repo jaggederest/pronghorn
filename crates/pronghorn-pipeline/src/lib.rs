@@ -5,13 +5,14 @@ pub mod kokoro;
 pub mod ollama;
 pub mod resample;
 pub mod sherpa;
+pub mod sherpa_tts;
 pub mod stt;
 pub mod tts;
 pub mod whisper;
 
 pub use config::{
     IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig, SherpaConfig,
-    SttBackend, SttConfig, TtsBackend, TtsConfig, WhisperConfig,
+    SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig, WhisperConfig,
 };
 pub use error::PipelineError;
 pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};
@@ -19,6 +20,7 @@ pub use kokoro::KokoroTts;
 pub use ollama::OllamaIntent;
 pub use resample::Resampler;
 pub use sherpa::SherpaStt;
+pub use sherpa_tts::SherpaTts;
 pub use stt::{EchoStt, SpeechToText, SttError, Transcript};
 pub use tts::{EchoTts, TextToSpeech, TtsError};
 pub use whisper::WhisperStt;
@@ -57,6 +59,7 @@ impl SpeechToText for SttDispatch {
 pub enum TtsDispatch {
     Echo(EchoTts),
     Kokoro(KokoroTts),
+    SherpaKokoro(SherpaTts),
 }
 
 impl TextToSpeech for TtsDispatch {
@@ -68,6 +71,7 @@ impl TextToSpeech for TtsDispatch {
         match self {
             Self::Echo(t) => t.synthesize(text, audio_tx).await,
             Self::Kokoro(t) => t.synthesize(text, audio_tx).await,
+            Self::SherpaKokoro(t) => t.synthesize(text, audio_tx).await,
         }
     }
 }
@@ -109,6 +113,10 @@ pub fn create_tts(config: &TtsConfig) -> Result<TtsDispatch, TtsError> {
         TtsBackend::Kokoro => {
             let tts = KokoroTts::new(&config.kokoro)?;
             Ok(TtsDispatch::Kokoro(tts))
+        }
+        TtsBackend::SherpaKokoro => {
+            let tts = SherpaTts::new(&config.sherpa_kokoro)?;
+            Ok(TtsDispatch::SherpaKokoro(tts))
         }
     }
 }

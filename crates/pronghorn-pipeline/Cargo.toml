@@ -30,7 +30,7 @@ hound = { version = "3.5", optional = true }
 tempfile = { version = "3", optional = true }
 kokoroxide = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
-sherpa-rs = { version = "0.6", optional = true, default-features = false, features = ["download-binaries"] }
+sherpa-rs = { version = "0.6", optional = true, default-features = false, features = ["download-binaries", "tts"] }
 
 [dev-dependencies]
 toml.workspace = true
