@@ -3,9 +3,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use pronghorn_audio::{AudioFormat, AudioFrame, RingBuffer};
 use pronghorn_wake::Detection;
-use pronghorn_wire::{
-    AudioData, Control, ControlType, Hello, Keepalive, Packet, Transport, audio_flags,
-};
+use pronghorn_wire::{AudioData, Control, ControlType, Hello, Keepalive, Packet, Transport};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -140,23 +138,13 @@ pub async fn run_satellite(
                         server_addr,
                     ).await?;
 
-                    // Drain pre-roll
+                    // Discard pre-roll for now — it contains the wake word tail
+                    // which Whisper would transcribe as noise. Future: capture
+                    // more pre-roll, screen out wake-word-length prefix, send rest.
                     sequence = 0;
                     timestamp = 0;
-                    let preroll = ring.drain();
-                    debug!(preroll_frames = preroll.len(), "draining pre-roll");
-                    for frame in preroll {
-                        let pkt = Packet::Audio(AudioData {
-                            session_id,
-                            sequence,
-                            flags: audio_flags::PRE_ROLL,
-                            timestamp,
-                            payload: frame.samples,
-                        });
-                        transport.send_to(&pkt, server_addr).await?;
-                        sequence = sequence.wrapping_add(1);
-                        timestamp = timestamp.wrapping_add(320);
-                    }
+                    let _discarded = ring.drain();
+                    debug!(discarded_frames = _discarded.len(), "discarded pre-roll (contains wake word)");
 
                     state = State::Streaming;
                     streaming_since = Some(tokio::time::Instant::now());

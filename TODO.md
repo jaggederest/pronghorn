@@ -1,20 +1,27 @@
 # TODO
 
-## Wire real backends into server orchestrator
+## Listening/acknowledgment sounds
 
-The server currently hardcodes `EchoStt`/`EchoTts`/`EchoIntent` in the orchestrator. Wire up `create_stt`/`create_tts`/`create_intent` factory functions so the server config actually selects the backend. This is the last step before a live end-to-end demo.
+Play audio cues on the satellite when the pipeline state changes:
+- **Wake word detected → "Yes?"** (short Kokoro TTS clip, pre-generated)
+- **StopListening/processing complete → "Got it."** (short Kokoro TTS clip, pre-generated)
 
-File: `crates/pronghorn-server/src/orchestrator.rs`
+Pre-generate the clips with Kokoro (bm_daniel voice) and bundle as WAV files.
+Play them locally on the satellite without round-tripping through the server.
+This matches the UX of the HA satellite pipeline's beep sounds but with
+a natural voice instead of a tone.
 
-## Unblock wake word detection
+File: `crates/pronghorn-satellite/src/event_loop.rs`, `crates/pronghorn-satellite/src/audio_io.rs`
 
-Rustpotter upstream has dep conflicts (candle-core/half). Options:
-1. Fork and fix the one-line DType match exhaustiveness in the Priler fork
-2. Wait for upstream PR #15 merge
-3. Switch to a different wake word engine
+## Pre-roll wake word screening
 
-Track: https://github.com/GiviMAD/rustpotter/pull/15
-File: `crates/pronghorn-wake/Cargo.toml`
+Currently pre-roll is discarded because it contains the tail of the wake word
+(e.g., "hey jarvis" gets transcribed as "service" by Whisper). Future approach:
+capture a longer pre-roll (e.g., 1 second), estimate the wake word duration
+(~800ms for "hey jarvis"), discard that prefix, send the remaining frames.
+This allows natural speech that overlaps with the wake word to be captured.
+
+File: `crates/pronghorn-satellite/src/event_loop.rs`
 
 ## Intent processing
 
@@ -25,11 +32,21 @@ The echo intent backend just parrots back the transcript. Need a real intent pro
 
 File: `crates/pronghorn-pipeline/src/intent.rs`
 
+## Voice activity detection (VAD)
+
+Replace the 5-second streaming timeout with real VAD to detect when the user
+stops speaking. Options:
+- Simple energy-based: stop when RMS drops below threshold for N frames
+- Silero VAD (small ONNX model, very accurate)
+- WebRTC VAD
+
+File: `crates/pronghorn-satellite/src/event_loop.rs`
+
 ## Performance
 
-- Whisper STT: 0.85x realtime on M-series (10s audio → 8.5s). Acceptable but could be faster with whisper-tiny or streaming.
-- Kokoro TTS: 1.7x realtime with quantized model. fp32 model would improve quality (bm_daniel sounds slightly congested with int8).
-- Consider whisper-tiny for simple home commands where accuracy is less critical.
+- Whisper STT: 0.85x realtime on M-series (10s audio → 8.5s). Try whisper-tiny for simple commands.
+- Kokoro TTS: 1.7x realtime with quantized model. fp32 model improves voice quality.
+- Resample error on last TTS chunk — resampler needs tail-flush handling.
 
 ## Future work
 
@@ -37,5 +54,4 @@ File: `crates/pronghorn-pipeline/src/intent.rs`
 - mDNS satellite discovery (currently config-based server address)
 - Barge-in support (interrupt TTS playback with new wake word)
 - Opus codec for compressed audio over WiFi
-- Voice activity detection (VAD) to auto-detect end of speech instead of manual StopListening
 - Streaming STT (process audio as it arrives, not batch after StopListening)
