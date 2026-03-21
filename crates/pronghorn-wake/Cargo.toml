@@ -8,16 +8,14 @@ description = "Wake word detection for Pronghorn voice protocol"
 
 [features]
 default = []
-# Rustpotter backend. Disabled — upstream has dep conflicts (candle-core/half).
-# The code in rustpotter_backend.rs is ready; re-add the dep when upstream is fixed.
-# Track: https://github.com/GiviMAD/rustpotter/pull/15
-rustpotter = []
+rustpotter = ["dep:rustpotter"]
 
 [dependencies]
 pronghorn-audio.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+rustpotter = { git = "https://github.com/jaggederest/rustpotter", optional = true }
 
 [dev-dependencies]
 toml.workspace = true

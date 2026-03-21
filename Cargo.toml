@@ -28,3 +28,14 @@ pronghorn-satellite = { path = "crates/pronghorn-satellite" }
 pronghorn-server = { path = "crates/pronghorn-server" }
 pronghorn-wake = { path = "crates/pronghorn-wake" }
 pronghorn-wire = { path = "crates/pronghorn-wire" }
+
+# Unpin half in tract so rustpotter (candle-core, half ^2.5) and
+# rusty-whisper (tract, half =2.4.1→>=2.4) can coexist
+[patch.crates-io]
+tract-data = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
+tract-core = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
+tract-hir = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
+tract-linalg = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
+tract-nnef = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
+tract-onnx = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
+tract-onnx-opl = { git = "https://github.com/jaggederest/tract", branch = "unpin-half" }
