@@ -22,20 +22,13 @@ model_dir = "models/sherpa-zipformer-en-offline"
 # language = "en"
 
 [pipeline.tts]
-backend = "sherpa-kokoro"
+backend = "kokoro"
 
-[pipeline.tts.sherpa_kokoro]
-model_dir = "models/sherpa-kokoro"
-speaker_id = 3    # kokoro-en-v0_19 speaker IDs 0-10
-speed = 1.0
-
-# [pipeline.tts]
-# backend = "kokoro"
-# [pipeline.tts.kokoro]
-# model_path = "models/kokoro/model_quantized.onnx"
-# tokenizer_path = "models/kokoro/tokenizer.json"
-# voices_path = "models/kokoro/voices"
-# voice = "bm_daniel"
+[pipeline.tts.kokoro]
+model_path = "models/kokoro/model_quantized.onnx"
+tokenizer_path = "models/kokoro/tokenizer.json"
+voices_path = "models/kokoro/voices"
+voice = "bm_daniel"
 
 [pipeline.intent]
 backend = "ollama"
