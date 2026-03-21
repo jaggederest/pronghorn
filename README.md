@@ -25,7 +25,7 @@ Pronghorn uses **native UDP streaming** with always-open connections and a custo
 
 - **20ms audio frames** (16kHz/16-bit/mono PCM, 640 bytes) — smaller than a single TCP handshake
 - **8-byte packet header** — version, type, flags, session ID
-- **Pre-roll ring buffer** — 300ms lookback so wake word detection never clips the start of a command
+- **Pre-roll ring buffer** — 300ms lookback for future wake-word-aware speech capture (currently discarded to avoid transcribing the wake word; see TODO for screening plan)
 - **Jitter buffer** — sequence-ordered playout absorbs network timing variance
 - **Pipeline stages** connected by async channels — STT, Intent, TTS stream data as it's produced
 

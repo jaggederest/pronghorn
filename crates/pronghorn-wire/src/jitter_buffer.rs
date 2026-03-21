@@ -116,13 +116,15 @@ impl JitterBuffer {
     }
 }
 
-/// Returns true if `a` is "before" `b` in sequence space (with u16 wrapping).
+/// Returns true if `a` is strictly "before" `b` in sequence space (with u16 wrapping).
 ///
 /// Uses the standard TCP-style comparison: a is before b if
-/// `b.wrapping_sub(a)` is in the range `1..=32767`.
+/// `b.wrapping_sub(a)` is in the range `1..=32767`. The value 32768
+/// (exactly half the space) is excluded to maintain strict ordering —
+/// at that distance the relation would be true in both directions.
 fn seq_before(a: u16, b: u16) -> bool {
     let diff = b.wrapping_sub(a);
-    diff > 0 && diff <= 32768
+    diff > 0 && diff < 32768
 }
 
 #[cfg(test)]

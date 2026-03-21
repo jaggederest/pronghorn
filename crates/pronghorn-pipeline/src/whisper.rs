@@ -22,6 +22,8 @@ struct InferenceRequest {
 pub struct WhisperStt {
     #[cfg(feature = "whisper")]
     request_tx: std::sync::mpsc::Sender<InferenceRequest>,
+    #[cfg(feature = "whisper")]
+    language: String,
     #[cfg(not(feature = "whisper"))]
     _config: WhisperConfig,
 }
@@ -112,7 +114,10 @@ impl WhisperStt {
                 })?;
 
             info!("whisper inference thread started");
-            Ok(Self { request_tx })
+            Ok(Self {
+                request_tx,
+                language: config.language.clone(),
+            })
         }
 
         #[cfg(not(feature = "whisper"))]
@@ -159,7 +164,7 @@ impl SpeechToText for WhisperStt {
             self.request_tx
                 .send(InferenceRequest {
                     samples_i16,
-                    language: "en".into(),
+                    language: self.language.clone(),
                     reply: reply_tx,
                 })
                 .map_err(|_| SttError::Stream("whisper inference thread gone".into()))?;

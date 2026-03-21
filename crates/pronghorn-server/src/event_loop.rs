@@ -104,17 +104,25 @@ async fn handle_packet(
             transport.send_to(&welcome, addr).await?;
         }
         Packet::Audio(audio) => {
-            sessions.touch(audio.session_id);
-            if let Some(handle) = handles.get(&audio.session_id)
-                && handle.audio_tx.send(audio).await.is_err()
-            {
-                debug!(
-                    session_id = handle.audio_tx.capacity(),
-                    "orchestrator channel closed"
-                );
+            if !session_addr_matches(sessions, audio.session_id, addr) {
+                warn!(session_id = audio.session_id, %addr, "audio from wrong address, dropping");
+            } else {
+                sessions.touch(audio.session_id);
+                if let Some(handle) = handles.get(&audio.session_id)
+                    && handle.audio_tx.send(audio).await.is_err()
+                {
+                    debug!(
+                        session_id = handle.audio_tx.capacity(),
+                        "orchestrator channel closed"
+                    );
+                }
             }
         }
         Packet::Control(ctrl) => {
+            if !session_addr_matches(sessions, ctrl.session_id, addr) {
+                warn!(session_id = ctrl.session_id, %addr, "control from wrong address, dropping");
+                return Ok(());
+            }
             sessions.touch(ctrl.session_id);
             match ctrl.control_type {
                 ControlType::StartListening => {
@@ -166,21 +174,36 @@ async fn handle_packet(
             }
         }
         Packet::Keepalive(k) => {
-            sessions.touch(k.session_id);
-            transport
-                .send_to(
-                    &Packet::Keepalive(Keepalive {
-                        session_id: k.session_id,
-                    }),
-                    addr,
-                )
-                .await?;
+            if !session_addr_matches(sessions, k.session_id, addr) {
+                warn!(session_id = k.session_id, %addr, "keepalive from wrong address, dropping");
+            } else {
+                sessions.touch(k.session_id);
+                transport
+                    .send_to(
+                        &Packet::Keepalive(Keepalive {
+                            session_id: k.session_id,
+                        }),
+                        addr,
+                    )
+                    .await?;
+            }
         }
         Packet::Welcome(_) => {
             warn!(%addr, "unexpected Welcome packet");
         }
     }
     Ok(())
+}
+
+/// Verify that a packet's session_id maps to a session from the expected address.
+fn session_addr_matches(
+    sessions: &SessionManager,
+    session_id: u32,
+    addr: std::net::SocketAddr,
+) -> bool {
+    sessions
+        .get(session_id)
+        .is_some_and(|s| s.remote_addr == addr)
 }
 
 async fn send_keepalives(transport: &Transport, sessions: &SessionManager) {
