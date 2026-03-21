@@ -1,23 +1,35 @@
 use pronghorn_audio::AudioFrame;
 use tokio::sync::mpsc;
+#[cfg(feature = "whisper")]
+use tokio::sync::oneshot;
 use tracing::info;
 
 use crate::config::WhisperConfig;
 use crate::stt::{SpeechToText, SttError, Transcript};
 
+/// Request sent to the Whisper inference thread.
+#[cfg(feature = "whisper")]
+struct InferenceRequest {
+    samples_i16: Vec<i16>,
+    language: String,
+    reply: oneshot::Sender<Result<String, String>>,
+}
+
 /// Whisper STT backend using rusty-whisper (tract ONNX inference).
 ///
-/// Loads encoder + decoder ONNX models, mel filterbank, tokenizer, and
-/// positional embeddings from a model directory. Audio frames are collected,
-/// written as a temp WAV file, and transcribed.
+/// The Whisper model (from rusty-whisper) isn't Send, so it lives on a
+/// dedicated background thread. Inference requests are sent via channel.
 pub struct WhisperStt {
     #[cfg(feature = "whisper")]
-    config: WhisperConfig,
-    #[cfg(feature = "whisper")]
-    whisper: rusty_whisper::Whisper,
+    request_tx: std::sync::mpsc::Sender<InferenceRequest>,
     #[cfg(not(feature = "whisper"))]
     _config: WhisperConfig,
 }
+
+// SAFETY: The Whisper model lives on its own thread. WhisperStt only holds
+// a channel sender (which is Send+Sync). No direct access to the model.
+unsafe impl Send for WhisperStt {}
+unsafe impl Sync for WhisperStt {}
 
 impl WhisperStt {
     pub fn new(config: &WhisperConfig) -> Result<Self, SttError> {
@@ -52,26 +64,55 @@ impl WhisperStt {
                 }
             }
 
-            info!(model_dir = %dir.display(), language = %config.language, "loading whisper model");
+            info!(model_dir = %dir.display(), "loading whisper model");
 
-            // rusty-whisper panics on errors internally — catch panics
-            let whisper = std::panic::catch_unwind(|| {
-                rusty_whisper::Whisper::new(
-                    encoder.to_str().unwrap(),
-                    decoder.to_str().unwrap(),
-                    tokenizer.to_str().unwrap(),
-                    pos_emb.to_str().unwrap(),
-                    mel_filters.to_str().unwrap(),
-                )
-            })
-            .map_err(|_| SttError::Connection("whisper model loading panicked".into()))?;
+            // Spawn a dedicated thread that owns the Whisper model
+            let (request_tx, request_rx) = std::sync::mpsc::channel::<InferenceRequest>();
 
-            info!("whisper model loaded");
+            let encoder_str = encoder.to_string_lossy().to_string();
+            let decoder_str = decoder.to_string_lossy().to_string();
+            let tokenizer_str = tokenizer.to_string_lossy().to_string();
+            let pos_emb_str = pos_emb.to_string_lossy().to_string();
+            let mel_filters_str = mel_filters.to_string_lossy().to_string();
 
-            Ok(Self {
-                config: config.clone(),
-                whisper,
-            })
+            std::thread::Builder::new()
+                .name("whisper-inference".into())
+                .spawn(move || {
+                    let whisper = rusty_whisper::Whisper::new(
+                        &encoder_str,
+                        &decoder_str,
+                        &tokenizer_str,
+                        &pos_emb_str,
+                        &mel_filters_str,
+                    );
+                    tracing::info!("whisper model loaded on inference thread");
+
+                    while let Ok(req) = request_rx.recv() {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            // Write temp WAV
+                            let wav_path = match write_temp_wav(&req.samples_i16) {
+                                Ok(p) => p,
+                                Err(e) => return Err(format!("failed to write temp WAV: {e}")),
+                            };
+                            let wav_str = wav_path.to_string_lossy().to_string();
+                            let text = whisper.recognize_from_audio(&wav_str, &req.language);
+                            let _ = std::fs::remove_file(&wav_path);
+                            Ok(text)
+                        }));
+
+                        let result = match result {
+                            Ok(r) => r,
+                            Err(_) => Err("whisper inference panicked".into()),
+                        };
+                        let _ = req.reply.send(result);
+                    }
+                })
+                .map_err(|e| {
+                    SttError::Connection(format!("failed to spawn whisper thread: {e}"))
+                })?;
+
+            info!("whisper inference thread started");
+            Ok(Self { request_tx })
         }
 
         #[cfg(not(feature = "whisper"))]
@@ -114,31 +155,19 @@ impl SpeechToText for WhisperStt {
 
         #[cfg(feature = "whisper")]
         {
-            // Step 2: Write temp WAV file (rusty-whisper only accepts file paths)
-            let wav_path = write_temp_wav(&samples_i16)
-                .map_err(|e| SttError::Stream(format!("failed to write temp WAV: {e}")))?;
+            let (reply_tx, reply_rx) = oneshot::channel();
+            self.request_tx
+                .send(InferenceRequest {
+                    samples_i16,
+                    language: "en".into(),
+                    reply: reply_tx,
+                })
+                .map_err(|_| SttError::Stream("whisper inference thread gone".into()))?;
 
-            let wav_path_str = wav_path.to_string_lossy().to_string();
-            let language = self.config.language.clone();
-
-            // Step 3: Run inference on a blocking thread (tract is CPU-bound)
-            // We need to move the whisper ref into the blocking task.
-            // Since Whisper may not be Send, we use the path approach.
-            let whisper_ref = &self.whisper;
-            let text = tokio::task::spawn_blocking({
-                // SAFETY: whisper is borrowed for the duration of the blocking task.
-                // The task completes before this function returns.
-                let whisper_ptr = whisper_ref as *const rusty_whisper::Whisper;
-                move || {
-                    let whisper = unsafe { &*whisper_ptr };
-                    whisper.recognize_from_audio(&wav_path_str, &language)
-                }
-            })
-            .await
-            .map_err(|e| SttError::Stream(format!("whisper inference task failed: {e}")))?;
-
-            // Clean up temp file
-            let _ = std::fs::remove_file(&wav_path);
+            let text = reply_rx
+                .await
+                .map_err(|_| SttError::Stream("whisper inference thread dropped reply".into()))?
+                .map_err(|e| SttError::Stream(e))?;
 
             let text = text.trim().to_string();
             info!(text = %text, duration_ms, "transcription complete");
@@ -166,11 +195,14 @@ impl SpeechToText for WhisperStt {
 }
 
 #[cfg(feature = "whisper")]
-fn write_temp_wav(samples: &[i16]) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+fn write_temp_wav(
+    samples: &[i16],
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
     use hound::{SampleFormat, WavSpec, WavWriter};
 
-    let temp_dir = tempfile::tempdir()?;
-    let path = temp_dir.into_path().join("audio.wav");
+    let dir = std::env::temp_dir().join("pronghorn-whisper");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.wav", std::process::id()));
 
     let spec = WavSpec {
         channels: 1,
