@@ -1,10 +1,10 @@
-mod config;
-
 use std::path::PathBuf;
 
+use pronghorn_audio::AudioFrame;
+use pronghorn_satellite::config::SatelliteConfig;
+use pronghorn_satellite::event_loop;
+use tokio::sync::mpsc;
 use tracing::info;
-
-use crate::config::SatelliteConfig;
 
 #[tokio::main]
 async fn main() {
@@ -24,5 +24,12 @@ async fn main() {
         "config loaded"
     );
 
-    // TODO: event loop (Phase 4)
+    // TODO (Phase 6): replace with real mic capture and speaker playback
+    let (_audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+    let (speaker_tx, _speaker_rx) = mpsc::channel::<AudioFrame>(64);
+
+    if let Err(e) = event_loop::run_satellite(config, audio_rx, speaker_tx).await {
+        eprintln!("satellite error: {e}");
+        std::process::exit(1);
+    }
 }

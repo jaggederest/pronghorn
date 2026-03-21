@@ -19,5 +19,7 @@ tracing-subscriber = "0.3"
 thiserror = "2"
 pronghorn-audio = { path = "crates/pronghorn-audio" }
 pronghorn-pipeline = { path = "crates/pronghorn-pipeline" }
+pronghorn-satellite = { path = "crates/pronghorn-satellite" }
+pronghorn-server = { path = "crates/pronghorn-server" }
 pronghorn-wake = { path = "crates/pronghorn-wake" }
 pronghorn-wire = { path = "crates/pronghorn-wire" }
