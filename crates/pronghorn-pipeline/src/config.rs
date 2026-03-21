@@ -93,6 +93,7 @@ impl Default for KokoroConfig {
 #[serde(default)]
 pub struct IntentConfig {
     pub backend: IntentBackend,
+    pub ollama: OllamaConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -100,6 +101,29 @@ pub struct IntentConfig {
 pub enum IntentBackend {
     #[default]
     Echo,
+    Ollama,
+}
+
+/// Configuration for the Ollama LLM intent backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OllamaConfig {
+    /// Ollama API base URL.
+    pub url: String,
+    /// Model name.
+    pub model: String,
+    /// System prompt for the assistant persona.
+    pub system_prompt: String,
+}
+
+impl Default for OllamaConfig {
+    fn default() -> Self {
+        Self {
+            url: "http://localhost:11434".into(),
+            model: "gemma3:1b".into(),
+            system_prompt: "You are Jarvis, a helpful voice assistant. Keep responses brief and conversational (1-2 sentences).".into(),
+        }
+    }
 }
 
 #[cfg(test)]

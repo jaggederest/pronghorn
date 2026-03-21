@@ -11,6 +11,7 @@ default = []
 onnx = ["dep:ort"]
 whisper = ["dep:rusty-whisper", "dep:hound", "dep:tempfile"]
 kokoro = ["dep:kokoroxide"]
+ollama = ["dep:reqwest"]
 
 [dependencies]
 pronghorn-audio.workspace = true
@@ -27,6 +28,7 @@ rusty-whisper = { workspace = true, optional = true }
 hound = { version = "3.5", optional = true }
 tempfile = { version = "3", optional = true }
 kokoroxide = { workspace = true, optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
 
 [dev-dependencies]
 toml.workspace = true

@@ -2,18 +2,20 @@ pub mod config;
 pub mod error;
 pub mod intent;
 pub mod kokoro;
+pub mod ollama;
 pub mod resample;
 pub mod stt;
 pub mod tts;
 pub mod whisper;
 
 pub use config::{
-    IntentBackend, IntentConfig, KokoroConfig, PipelineConfig, SttBackend, SttConfig, TtsBackend,
-    TtsConfig, WhisperConfig,
+    IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig, SttBackend, SttConfig,
+    TtsBackend, TtsConfig, WhisperConfig,
 };
 pub use error::PipelineError;
 pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};
 pub use kokoro::KokoroTts;
+pub use ollama::OllamaIntent;
 pub use resample::Resampler;
 pub use stt::{EchoStt, SpeechToText, SttError, Transcript};
 pub use tts::{EchoTts, TextToSpeech, TtsError};
@@ -69,12 +71,14 @@ impl TextToSpeech for TtsDispatch {
 /// Runtime-dispatched intent backend.
 pub enum IntentDispatch {
     Echo(EchoIntent),
+    Ollama(OllamaIntent),
 }
 
 impl IntentProcessor for IntentDispatch {
     async fn process(&self, transcript: &str) -> Result<IntentResponse, IntentError> {
         match self {
             Self::Echo(i) => i.process(transcript).await,
+            Self::Ollama(i) => i.process(transcript).await,
         }
     }
 }
@@ -105,6 +109,10 @@ pub fn create_tts(config: &TtsConfig) -> Result<TtsDispatch, TtsError> {
 pub fn create_intent(config: &IntentConfig) -> Result<IntentDispatch, IntentError> {
     match config.backend {
         IntentBackend::Echo => Ok(IntentDispatch::Echo(EchoIntent)),
+        IntentBackend::Ollama => {
+            let intent = OllamaIntent::new(&config.ollama)?;
+            Ok(IntentDispatch::Ollama(intent))
+        }
     }
 }
 

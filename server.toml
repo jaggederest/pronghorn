@@ -26,4 +26,9 @@ voices_path = "models/kokoro/voices"
 voice = "bm_daniel"
 
 [pipeline.intent]
-backend = "echo"
+backend = "ollama"
+
+[pipeline.intent.ollama]
+url = "http://localhost:11434"
+model = "gemma3:1b"
+system_prompt = "You are Jarvis, a helpful voice assistant. Keep responses brief and conversational (1-2 sentences)."
