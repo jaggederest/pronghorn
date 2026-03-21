@@ -5,25 +5,34 @@ Fast, low-latency voice assistant protocol. Native UDP streaming replacement for
 ## Build & Test
 
 ```bash
-cargo build                    # build all crates
-cargo test --workspace         # run all tests (unit + integration)
-cargo clippy --workspace --all-targets -- -D warnings  # lint
-cargo fmt --all                # format
-cargo run                      # run the main binary
+cargo build --workspace                                   # build all crates
+cargo test --workspace                                    # run all tests
+cargo clippy --workspace --all-targets -- -D warnings     # lint
+cargo fmt --all                                           # format
+cargo build -p pronghorn-satellite                        # satellite binary only
+cargo build -p pronghorn-server                           # server binary only
 ```
 
 ## Workspace Crates
 
+### Libraries
 - `pronghorn-audio` — Audio types: format descriptors, PCM frames, ring buffer
-- `pronghorn-wake` — Wake word detection: pluggable trait, reframer, config (rustpotter backend behind feature flag)
+- `pronghorn-wake` — Wake word detection: pluggable trait, reframer, config (rustpotter behind feature flag)
 - `pronghorn-wire` — Wire protocol: packet codec, UDP transport, session management
+- `pronghorn-pipeline` — Pipeline stage traits: STT, TTS, Intent (echo backends for dev)
+
+### Binaries
+- `pronghorn-satellite` — Thin satellite: wake word + audio streaming (for Pi Zero 2)
+- `pronghorn-server` — Server: pipeline orchestration (STT → Intent → TTS)
 
 ## Architecture
 
 - Pure Rust, async with tokio
 - UDP wire-level streaming for minimal latency (not chunked HTTP/WebSocket like Wyoming)
 - Always-open connections to eliminate handshake overhead
-- 8-byte fixed packet header, big-endian, zero-copy codec via `bytes`
+- Separate satellite/server binaries — satellite is dependency-minimal for Pi Zero 2
+- Pipeline stages connected by tokio mpsc channels for streaming with backpressure
+- External STT/TTS services (faster-whisper, Piper) via persistent connections
 
 ## Wire Protocol
 

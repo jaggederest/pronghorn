@@ -1,0 +1,24 @@
+# Pronghorn server configuration
+# Runs on the HA host or a capable server
+
+[audio]
+sample_rate = 16000
+channels = 1
+sample_size = 2
+
+[transport]
+bind_address = "0.0.0.0:9999"
+jitter_buffer_delay = 3
+keepalive_interval_ms = 5000
+session_timeout_ms = 30000
+
+[pipeline.stt]
+backend = "echo"
+# url = "ws://localhost:9090"
+
+[pipeline.tts]
+backend = "echo"
+# url = "http://localhost:5500"
+
+[pipeline.intent]
+backend = "echo"

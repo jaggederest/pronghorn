@@ -1,27 +1,25 @@
 use std::path::Path;
 
 use pronghorn_audio::AudioConfig;
-use pronghorn_wake::WakeConfig;
+use pronghorn_pipeline::PipelineConfig;
 use pronghorn_wire::TransportConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct PronghornConfig {
+pub struct ServerConfig {
     pub audio: AudioConfig,
-    pub wake: WakeConfig,
     pub transport: TransportConfig,
+    pub pipeline: PipelineConfig,
 }
 
-impl PronghornConfig {
-    /// Load config from a TOML file, falling back to defaults for missing fields.
+impl ServerConfig {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&contents)?;
         Ok(config)
     }
 
-    /// Load from `path` if it exists, otherwise return defaults.
     pub fn load_or_default(path: &Path) -> Result<Self, ConfigError> {
         if path.exists() {
             Self::load(path)

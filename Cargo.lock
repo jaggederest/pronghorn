@@ -602,9 +602,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "pronghorn"
+name = "pronghorn-audio"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "pronghorn-pipeline"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "pronghorn-audio",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "pronghorn-satellite"
+version = "0.1.0"
+dependencies = [
+ "bytes",
  "pronghorn-audio",
  "pronghorn-wake",
  "pronghorn-wire",
@@ -617,12 +641,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "pronghorn-audio"
+name = "pronghorn-server"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "pronghorn-audio",
+ "pronghorn-pipeline",
+ "pronghorn-wire",
  "serde",
+ "thiserror 2.0.18",
+ "tokio",
  "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
