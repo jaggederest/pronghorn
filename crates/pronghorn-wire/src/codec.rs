@@ -19,7 +19,7 @@ impl Packet {
                 put_header(buf, PacketType::Keepalive, 0, k.session_id);
             }
             Packet::Audio(a) => {
-                put_header(buf, PacketType::Audio, 0, a.session_id);
+                put_header(buf, PacketType::Audio, a.flags, a.session_id);
                 buf.put_u16(a.sequence);
                 buf.put_u16(0); // reserved
                 buf.put_u32(a.timestamp);
@@ -50,7 +50,7 @@ impl Packet {
         }
 
         let packet_type = buf.get_u8();
-        let _flags = buf.get_u8();
+        let flags = buf.get_u8();
         let _reserved = buf.get_u8();
         let session_id = buf.get_u32();
 
@@ -80,6 +80,7 @@ impl Packet {
                 Ok(Packet::Audio(AudioData {
                     session_id,
                     sequence,
+                    flags,
                     timestamp,
                     payload,
                 }))
@@ -173,6 +174,7 @@ mod tests {
         let original = Packet::Audio(AudioData {
             session_id: 1,
             sequence: 99,
+            flags: 0,
             timestamp: 16000,
             payload: payload.clone(),
         });

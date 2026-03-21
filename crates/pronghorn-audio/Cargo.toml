@@ -8,3 +8,7 @@ description = "Audio types and utilities for Pronghorn voice protocol"
 
 [dependencies]
 bytes.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

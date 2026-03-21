@@ -1,0 +1,121 @@
+use std::collections::VecDeque;
+
+use crate::AudioFrame;
+
+/// Recommended pre-roll capacity: 15 frames at 20ms = 300ms lookback.
+/// Covers wake word detector latency and avoids clipping the start of commands.
+pub const DEFAULT_PREROLL_FRAMES: usize = 15;
+
+/// Fixed-capacity ring buffer for audio pre-roll.
+///
+/// On the client (satellite) side, audio frames are pushed continuously.
+/// When the buffer is full, the oldest frame is silently dropped.
+/// On wake word detection the buffer is drained to recover the audio
+/// that was captured just before the trigger — the "pre-roll".
+pub struct RingBuffer {
+    frames: VecDeque<AudioFrame>,
+    capacity: usize,
+}
+
+impl RingBuffer {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            frames: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    /// Push a frame, dropping the oldest if at capacity.
+    pub fn push(&mut self, frame: AudioFrame) {
+        if self.frames.len() == self.capacity {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(frame);
+    }
+
+    /// Drain all buffered frames (oldest first) for pre-roll transmission.
+    pub fn drain(&mut self) -> Vec<AudioFrame> {
+        self.frames.drain(..).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::AudioFormat;
+
+    fn make_frame(id_byte: u8) -> AudioFrame {
+        // Use a distinctive byte so we can tell frames apart
+        AudioFrame::new(AudioFormat::SPEECH, Bytes::from(vec![id_byte; 640]))
+    }
+
+    #[test]
+    fn basic_push_drain() {
+        let mut rb = RingBuffer::new(5);
+        rb.push(make_frame(1));
+        rb.push(make_frame(2));
+        assert_eq!(rb.len(), 2);
+
+        let frames = rb.drain();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].samples[0], 1);
+        assert_eq!(frames[1].samples[0], 2);
+        assert!(rb.is_empty());
+    }
+
+    #[test]
+    fn overflow_drops_oldest() {
+        let mut rb = RingBuffer::new(3);
+        rb.push(make_frame(1));
+        rb.push(make_frame(2));
+        rb.push(make_frame(3));
+        rb.push(make_frame(4)); // drops frame 1
+        rb.push(make_frame(5)); // drops frame 2
+
+        assert_eq!(rb.len(), 3);
+        let frames = rb.drain();
+        assert_eq!(frames[0].samples[0], 3);
+        assert_eq!(frames[1].samples[0], 4);
+        assert_eq!(frames[2].samples[0], 5);
+    }
+
+    #[test]
+    fn drain_is_idempotent() {
+        let mut rb = RingBuffer::new(3);
+        rb.push(make_frame(1));
+        let _ = rb.drain();
+        let frames = rb.drain();
+        assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn fifteen_frame_preroll() {
+        // Simulate the actual use case: 15-frame pre-roll at 20ms = 300ms lookback.
+        // 300ms covers wake word detector latency and catches the start of commands.
+        let mut rb = RingBuffer::new(15);
+        for i in 0..40u8 {
+            rb.push(make_frame(i));
+        }
+        assert_eq!(rb.len(), 15);
+
+        let frames = rb.drain();
+        // Should have frames 25..40 (the last 15)
+        for (i, frame) in frames.iter().enumerate() {
+            assert_eq!(frame.samples[0], (25 + i) as u8);
+        }
+    }
+}

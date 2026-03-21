@@ -9,9 +9,11 @@ description = "Wire protocol and UDP transport for Pronghorn voice protocol"
 [dependencies]
 pronghorn-audio.workspace = true
 bytes.workspace = true
+serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+toml.workspace = true

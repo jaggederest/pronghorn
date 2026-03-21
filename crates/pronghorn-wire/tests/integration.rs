@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use bytes::Bytes;
+use pronghorn_audio::{AudioFormat, AudioFrame, RingBuffer};
 use pronghorn_wire::*;
 
 fn localhost(port: u16) -> SocketAddr {
@@ -69,6 +70,7 @@ async fn audio_packet_fidelity() {
     let audio = Packet::Audio(AudioData {
         session_id: 1,
         sequence: 0,
+        flags: 0,
         timestamp: 0,
         payload: payload.clone(),
     });
@@ -104,6 +106,7 @@ async fn audio_stream_sequence() {
         let pkt = Packet::Audio(AudioData {
             session_id: 1,
             sequence: seq,
+            flags: 0,
             timestamp: seq as u32 * 320, // 320 samples per 20ms frame
             payload: frame.clone(),
         });
@@ -211,6 +214,81 @@ fn session_manager_reap_stale() {
     let reaped = mgr.reap_stale(deadline);
     // Both are older than a second from now
     assert_eq!(reaped.len(), 2);
+}
+
+// ── pre-roll → jitter buffer full flow ──────────────────────────────
+
+#[tokio::test]
+async fn preroll_to_jitter_buffer_over_udp() {
+    let server = Transport::bind(localhost(0)).await.unwrap();
+    let client = Transport::bind(localhost(0)).await.unwrap();
+    let server_addr = server.local_addr().unwrap();
+
+    // Client side: 15-frame ring buffer (300ms pre-roll at 20ms frames)
+    let mut ring = RingBuffer::new(15);
+
+    // Simulate continuous audio capture: 30 frames of audio flow through the ring buffer
+    for i in 0u8..30 {
+        ring.push(AudioFrame::new(
+            AudioFormat::SPEECH,
+            Bytes::from(vec![i; 640]),
+        ));
+    }
+    // Ring buffer now holds frames 15..30
+
+    // Wake word fires! Drain pre-roll and send as flagged packets
+    let preroll = ring.drain();
+    assert_eq!(preroll.len(), 15);
+
+    let mut seq = 0u16;
+    for frame in &preroll {
+        let pkt = Packet::Audio(AudioData {
+            session_id: 1,
+            sequence: seq,
+            flags: audio_flags::PRE_ROLL,
+            timestamp: seq as u32 * 320,
+            payload: frame.samples.clone(),
+        });
+        client.send_to(&pkt, server_addr).await.unwrap();
+        seq += 1;
+    }
+
+    // Then 5 frames of live audio
+    for i in 0u8..5 {
+        let pkt = Packet::Audio(AudioData {
+            session_id: 1,
+            sequence: seq,
+            flags: 0,
+            timestamp: seq as u32 * 320,
+            payload: Bytes::from(vec![100 + i; 640]),
+        });
+        client.send_to(&pkt, server_addr).await.unwrap();
+        seq += 1;
+    }
+
+    // Server side: receive into jitter buffer
+    let mut jb = JitterBuffer::new(3);
+    for _ in 0..20 {
+        let (pkt, _) = server.recv_from().await.unwrap();
+        if let Packet::Audio(a) = pkt {
+            jb.push(a);
+        }
+    }
+
+    // Playout: first 15 should be pre-roll, next 5 live
+    for expected_seq in 0u16..15 {
+        let frame = jb.pop().unwrap();
+        assert_eq!(frame.sequence, expected_seq);
+        assert!(frame.is_pre_roll());
+        // Payload should be frame (15 + expected_seq) from the original capture
+        assert_eq!(frame.payload[0], (15 + expected_seq) as u8);
+    }
+    for expected_seq in 15u16..20 {
+        let frame = jb.pop().unwrap();
+        assert_eq!(frame.sequence, expected_seq);
+        assert!(!frame.is_pre_roll());
+    }
+    assert!(jb.pop().is_none());
 }
 
 // ── latency sanity check ────────────────────────────────────────────

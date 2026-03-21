@@ -1,0 +1,20 @@
+# Pronghorn configuration
+# All fields are optional — defaults are used for anything omitted.
+
+[audio]
+# Audio format for capture and playback
+sample_rate = 16000
+channels = 1
+sample_size = 2
+# Pre-roll ring buffer: 15 frames × 20ms = 300ms lookback
+preroll_frames = 15
+
+[transport]
+# Server bind address
+bind_address = "0.0.0.0:9999"
+# Jitter buffer playout delay in frames (3 for LAN, 5 for WiFi)
+jitter_buffer_delay = 3
+# Keepalive interval (ms)
+keepalive_interval_ms = 5000
+# Reap sessions after this much inactivity (ms)
+session_timeout_ms = 30000

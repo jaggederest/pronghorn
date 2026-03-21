@@ -3,7 +3,7 @@
 /// Defines the shape of audio data: sample rate, channel count, and bytes per sample.
 /// All wire protocol audio packets reference a format so both sides agree on how
 /// to interpret the raw PCM bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct AudioFormat {
     /// Samples per second (e.g. 16000 for 16 kHz)
     pub sample_rate: u32,

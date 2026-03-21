@@ -58,6 +58,13 @@ pub struct Keepalive {
     pub session_id: u32,
 }
 
+// ── audio packet flags ──────────────────────────────────────────────
+
+pub mod audio_flags {
+    /// This frame is from the pre-roll ring buffer (captured before wake word fired).
+    pub const PRE_ROLL: u8 = 0x01;
+}
+
 /// A chunk of raw PCM audio.
 ///
 /// Wire layout after the 8-byte header:
@@ -65,13 +72,22 @@ pub struct Keepalive {
 ///   [10..12]  reserved
 ///   [12..16]  timestamp in samples (big-endian u32)
 ///   [16..]    PCM payload
+///
+/// The `flags` field is carried in the packet header's flags byte.
 #[derive(Debug, Clone)]
 pub struct AudioData {
     pub session_id: u32,
     pub sequence: u16,
+    pub flags: u8,
     /// Timestamp in sample units. At 16 kHz this wraps every ~74 hours.
     pub timestamp: u32,
     pub payload: Bytes,
+}
+
+impl AudioData {
+    pub fn is_pre_roll(&self) -> bool {
+        self.flags & audio_flags::PRE_ROLL != 0
+    }
 }
 
 /// Session lifecycle and pipeline control signals.
