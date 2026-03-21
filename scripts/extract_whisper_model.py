@@ -103,11 +103,18 @@ def main():
 
     class DecoderWrapper(torch.nn.Module):
         """Wrapper that takes flat inputs matching rusty-whisper's expected format."""
-        def __init__(self, decoder, n_text_layer, n_text_state):
+        def __init__(self, decoder, n_text_layer, n_text_state, n_ctx):
             super().__init__()
             self.decoder = decoder
             self.n_text_layer = n_text_layer
             self.n_text_state = n_text_state
+            # Precompute a large causal mask as a buffer (avoids dynamic ops)
+            # Upper-triangular infinity mask for max possible size
+            mask = torch.triu(
+                torch.ones(n_ctx, n_ctx) * float('-inf'),
+                diagonal=1
+            )
+            self.register_buffer('causal_mask', mask)
 
         def forward(self, tokens, audio_features, pos_emb, *kv_args):
             # tokens: [batch, seq_len] int32
@@ -158,14 +165,18 @@ def main():
 
                 attn_weights = torch.matmul(q, k_h.transpose(-2, -1)) * scale
 
-                # Causal mask
-                seq_len_q = q.shape[2]
+                # Causal mask — slice from precomputed buffer
+                # This avoids torch.triu/torch.arange which produce
+                # ONNX ops that tract can't handle with dynamic shapes
                 seq_len_k = k_h.shape[2]
-                causal_mask = torch.triu(
-                    torch.ones(seq_len_q, seq_len_k, device=q.device) * float('-inf'),
-                    diagonal=seq_len_k - seq_len_q + 1
-                )
-                attn_weights = attn_weights + causal_mask
+                seq_len_q = q.shape[2]
+                # For KV cache: rows = new query positions, cols = all key positions
+                # We need the bottom-right corner of the full causal mask
+                mask_slice = self.causal_mask[
+                    seq_len_k - seq_len_q:seq_len_k,
+                    :seq_len_k
+                ]
+                attn_weights = attn_weights + mask_slice
 
                 attn_weights = torch.softmax(attn_weights, dim=-1)
                 attn_out = torch.matmul(attn_weights, v_h)
@@ -210,7 +221,8 @@ def main():
 
             return tuple(outputs)
 
-    wrapper = DecoderWrapper(model.decoder, n_text_layer, n_text_state)
+    n_ctx = 448  # max context length for whisper
+    wrapper = DecoderWrapper(model.decoder, n_text_layer, n_text_state, n_ctx)
     wrapper.eval()
 
     # Dummy inputs matching rusty-whisper expectations
@@ -218,7 +230,10 @@ def main():
     dummy_tokens = torch.zeros(1, seq_len, dtype=torch.int32)
     dummy_audio = torch.randn(1, n_audio_ctx, n_text_state)
     dummy_pos = torch.randn(1, seq_len, n_text_state)
-    dummy_kv = [torch.zeros(1, 0, n_text_state) for _ in range(n_text_layer * 2)]
+    # Use non-zero cache length so the tracer takes the concat path
+    # (if cache is empty, the tracer prunes the KV inputs entirely)
+    dummy_cache_len = 2
+    dummy_kv = [torch.randn(1, dummy_cache_len, n_text_state) for _ in range(n_text_layer * 2)]
 
     all_inputs = [dummy_tokens, dummy_audio, dummy_pos] + dummy_kv
 
