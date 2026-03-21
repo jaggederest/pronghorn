@@ -1,10 +1,8 @@
-mod config;
-
 use std::path::PathBuf;
 
+use pronghorn_server::config::ServerConfig;
+use pronghorn_server::event_loop;
 use tracing::info;
-
-use crate::config::ServerConfig;
 
 #[tokio::main]
 async fn main() {
@@ -26,5 +24,8 @@ async fn main() {
         "config loaded"
     );
 
-    // TODO: event loop (Phase 3)
+    if let Err(e) = event_loop::run_server(config).await {
+        eprintln!("server error: {e}");
+        std::process::exit(1);
+    }
 }
