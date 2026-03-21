@@ -4,19 +4,21 @@ pub mod intent;
 pub mod kokoro;
 pub mod ollama;
 pub mod resample;
+pub mod sherpa;
 pub mod stt;
 pub mod tts;
 pub mod whisper;
 
 pub use config::{
-    IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig, SttBackend, SttConfig,
-    TtsBackend, TtsConfig, WhisperConfig,
+    IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig, SherpaConfig,
+    SttBackend, SttConfig, TtsBackend, TtsConfig, WhisperConfig,
 };
 pub use error::PipelineError;
 pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};
 pub use kokoro::KokoroTts;
 pub use ollama::OllamaIntent;
 pub use resample::Resampler;
+pub use sherpa::SherpaStt;
 pub use stt::{EchoStt, SpeechToText, SttError, Transcript};
 pub use tts::{EchoTts, TextToSpeech, TtsError};
 pub use whisper::WhisperStt;
@@ -34,6 +36,7 @@ use tokio::sync::mpsc;
 pub enum SttDispatch {
     Echo(EchoStt),
     Whisper(WhisperStt),
+    Sherpa(SherpaStt),
 }
 
 impl SpeechToText for SttDispatch {
@@ -45,6 +48,7 @@ impl SpeechToText for SttDispatch {
         match self {
             Self::Echo(s) => s.transcribe(audio_rx, transcript_tx).await,
             Self::Whisper(s) => s.transcribe(audio_rx, transcript_tx).await,
+            Self::Sherpa(s) => s.transcribe(audio_rx, transcript_tx).await,
         }
     }
 }
@@ -90,6 +94,10 @@ pub fn create_stt(config: &SttConfig) -> Result<SttDispatch, SttError> {
         SttBackend::Whisper => {
             let stt = WhisperStt::new(&config.whisper)?;
             Ok(SttDispatch::Whisper(stt))
+        }
+        SttBackend::Sherpa => {
+            let stt = SherpaStt::new(&config.sherpa)?;
+            Ok(SttDispatch::Sherpa(stt))
         }
     }
 }

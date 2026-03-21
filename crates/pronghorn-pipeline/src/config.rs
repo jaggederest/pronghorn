@@ -17,6 +17,8 @@ pub struct SttConfig {
     pub backend: SttBackend,
     /// Whisper-specific configuration.
     pub whisper: WhisperConfig,
+    /// Sherpa-ONNX streaming configuration.
+    pub sherpa: SherpaConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -25,6 +27,23 @@ pub enum SttBackend {
     #[default]
     Echo,
     Whisper,
+    Sherpa,
+}
+
+/// Configuration for the Sherpa-ONNX streaming STT backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SherpaConfig {
+    /// Directory containing encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
+    pub model_dir: PathBuf,
+}
+
+impl Default for SherpaConfig {
+    fn default() -> Self {
+        Self {
+            model_dir: PathBuf::from("models/sherpa-zipformer-en-20m"),
+        }
+    }
 }
 
 /// Configuration for the Whisper ONNX STT backend.

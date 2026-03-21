@@ -11,6 +11,7 @@ default = []
 whisper = ["pronghorn-pipeline/whisper"]
 kokoro = ["pronghorn-pipeline/kokoro"]
 ollama = ["pronghorn-pipeline/ollama"]
+sherpa = ["pronghorn-pipeline/sherpa"]
 
 [dependencies]
 pronghorn-audio.workspace = true

@@ -10,11 +10,16 @@ keepalive_interval_ms = 5000
 session_timeout_ms = 30000
 
 [pipeline.stt]
-backend = "whisper"
+backend = "sherpa"
 
-[pipeline.stt.whisper]
-model_dir = "models/whisper-base"
-language = "en"
+[pipeline.stt.sherpa]
+model_dir = "models/sherpa-zipformer-en-20m"
+
+# [pipeline.stt]
+# backend = "whisper"
+# [pipeline.stt.whisper]
+# model_dir = "models/whisper-base"
+# language = "en"
 
 [pipeline.tts]
 backend = "kokoro"
