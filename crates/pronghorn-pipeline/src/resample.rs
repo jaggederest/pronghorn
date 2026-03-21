@@ -41,7 +41,19 @@ impl Resampler {
         let mut output = Vec::with_capacity(input.len() * 2 / 3 + 64);
 
         for chunk in input.chunks(chunk_size) {
-            let adapter = InterleavedSlice::new(chunk, 1, chunk.len()).unwrap();
+            // Pad the last chunk to the required size if needed
+            let padded;
+            let data = if chunk.len() < chunk_size {
+                padded = {
+                    let mut v = chunk.to_vec();
+                    v.resize(chunk_size, 0.0);
+                    v
+                };
+                &padded[..]
+            } else {
+                chunk
+            };
+            let adapter = InterleavedSlice::new(data, 1, data.len()).unwrap();
 
             match self.inner.process(&adapter, 0, None) {
                 Ok(result) => {
