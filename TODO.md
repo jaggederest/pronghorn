@@ -1,57 +1,56 @@
 # TODO
 
+## Next: Swap Whisper for Sherpa-ONNX streaming STT
+
+Replace rusty-whisper (batch, ~5s latency) with sherpa-onnx's streaming Zipformer transducer (~320ms chunks, partial transcripts). The 20M-param model is 27MB on disk and runs at RTF <0.05 on Pi 5.
+
+Integration path: `sherpa-rs` crate (wraps C API) or direct FFI to sherpa-onnx. Start in batch mode for the swap, then enable true streaming with partial transcripts.
+
+See: `docs/streaming-stt-research.md` for full analysis.
+
+## Progressive intent resolver (word-trie + LLM fallback)
+
+Build a word-level trie from Home Assistant's Hassil sentence templates. As words arrive from streaming STT, walk the trie to resolve commands deterministically in microseconds. Fall back to LLM only when the pattern goes off-script.
+
+Target: simple commands ("turn on the kitchen lights") execute in <500ms from end of speech — no LLM round-trip.
+
+See: `docs/streaming-stt-research.md` Part 2 for architecture.
+
+## Home Assistant WebSocket integration
+
+Connect to HA via WebSocket to:
+- Fetch entity registry (names, areas, aliases) for fuzzy matching
+- Execute actions via `call_service`
+- Subscribe to entity updates
+
 ## Listening/acknowledgment sounds
 
-Play audio cues on the satellite when the pipeline state changes:
-- **Wake word detected → "Yes?"** (short Kokoro TTS clip, pre-generated)
-- **StopListening/processing complete → "Got it."** (short Kokoro TTS clip, pre-generated)
-
-Pre-generate the clips with Kokoro (bm_daniel voice) and bundle as WAV files.
-Play them locally on the satellite without round-tripping through the server.
-This matches the UX of the HA satellite pipeline's beep sounds but with
-a natural voice instead of a tone.
-
-File: `crates/pronghorn-satellite/src/event_loop.rs`, `crates/pronghorn-satellite/src/audio_io.rs`
+Play "Yes?" (wake detected) and "Got it." (processing) via pre-generated Kokoro clips on the satellite. Play locally without server round-trip.
 
 ## Pre-roll wake word screening
 
-Currently pre-roll is discarded because it contains the tail of the wake word
-(e.g., "hey jarvis" gets transcribed as "service" by Whisper). Future approach:
-capture a longer pre-roll (e.g., 1 second), estimate the wake word duration
-(~800ms for "hey jarvis"), discard that prefix, send the remaining frames.
-This allows natural speech that overlaps with the wake word to be captured.
+Capture longer pre-roll (~1s), discard wake-word-length prefix, send remaining frames. Avoids both clipping the command start and transcribing the wake word.
 
-File: `crates/pronghorn-satellite/src/event_loop.rs`
+## VAD improvements
 
-## Intent processing
+- Current energy-based VAD works but threshold needs per-mic calibration
+- Consider Silero VAD (2MB ONNX) for more robust endpoint detection
+- Sherpa-ONNX bundles Silero VAD if we switch STT
 
-The echo intent backend just parrots back the transcript. Need a real intent processor that can:
-- Parse voice commands ("turn on the kitchen lights")
-- Map to Home Assistant entity IDs and services
-- Generate natural language responses
+## Whisper-tiny support (if keeping Whisper as fallback)
 
-File: `crates/pronghorn-pipeline/src/intent.rs`
+rusty-whisper hardcodes 6 decoder layers (whisper-base). Tiny has 4, small has 12. Fork needs parameterization by layer count.
 
-## Voice activity detection (VAD)
+## Performance notes
 
-Replace the 5-second streaming timeout with real VAD to detect when the user
-stops speaking. Options:
-- Simple energy-based: stop when RMS drops below threshold for N frames
-- Silero VAD (small ONNX model, very accurate)
-- WebRTC VAD
-
-File: `crates/pronghorn-satellite/src/event_loop.rs`
-
-## Performance
-
-- Whisper STT: 0.85x realtime on M-series (10s audio → 8.5s). Try whisper-tiny for simple commands.
-- Kokoro TTS: 1.7x realtime with quantized model. fp32 model improves voice quality.
-- Resample error on last TTS chunk — resampler needs tail-flush handling.
+- Whisper-base STT: ~5s for ~2.5s audio (M-series). Bottleneck.
+- Kokoro TTS: 1.7x realtime with quantized model. fp32 improves quality.
+- Resampler tail chunk fixed (zero-pad).
+- VAD: 500ms silence detection working at threshold 200.
 
 ## Future work
 
-- Home Assistant direct device API integration (bypass conversation pipeline)
-- mDNS satellite discovery (currently config-based server address)
-- Barge-in support (interrupt TTS playback with new wake word)
+- Moonshine v2 streaming ONNX exports — benchmark against Zipformer when available
 - Opus codec for compressed audio over WiFi
-- Streaming STT (process audio as it arrives, not batch after StopListening)
+- Barge-in support (interrupt TTS with new wake word)
+- Multiple satellite support (different wake word samples per user/location)
