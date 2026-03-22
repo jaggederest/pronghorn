@@ -13,7 +13,7 @@ session_timeout_ms = 30000
 backend = "sherpa"
 
 [pipeline.stt.sherpa]
-model_dir = "models/sherpa-zipformer-en-20m"
+model_dir = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
 
 # [pipeline.stt]
 # backend = "whisper"

@@ -2519,6 +2519,7 @@ version = "0.1.0"
 dependencies = [
  "audioadapter-buffers",
  "bytes",
+ "glob",
  "hound",
  "kokoroxide",
  "ort",
@@ -3248,8 +3249,8 @@ dependencies = [
 
 [[package]]
 name = "sherpa-rs"
-version = "0.6.8"
-source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#29737edfa61b4c23a8150b87faf4863dc8093031"
+version = "0.7.0-pronghorn.1"
+source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#df8e1ea02774763dbcba8d64a579977890afe2a0"
 dependencies = [
  "eyre",
  "hound",
@@ -3259,8 +3260,8 @@ dependencies = [
 
 [[package]]
 name = "sherpa-rs-sys"
-version = "0.6.8"
-source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#29737edfa61b4c23a8150b87faf4863dc8093031"
+version = "0.7.0-pronghorn.1"
+source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#df8e1ea02774763dbcba8d64a579977890afe2a0"
 dependencies = [
  "bindgen",
  "bzip2",

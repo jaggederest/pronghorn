@@ -40,34 +40,14 @@ impl SherpaStt {
     pub fn new(config: &SherpaConfig) -> Result<Self, SttError> {
         #[cfg(feature = "sherpa")]
         {
-            let dir = &config.model_dir;
-            if !dir.exists() {
-                return Err(SttError::Connection(format!(
-                    "model directory not found: {}",
-                    dir.display()
-                )));
-            }
+            let (encoder, decoder, joiner, tokens) =
+                config.resolve_model_files().map_err(SttError::Connection)?;
 
-            let encoder = dir.join("encoder.onnx");
-            let decoder = dir.join("decoder.onnx");
-            let joiner = dir.join("joiner.onnx");
-            let tokens = dir.join("tokens.txt");
-
-            for (name, path) in [
-                ("encoder", &encoder),
-                ("decoder", &decoder),
-                ("joiner", &joiner),
-                ("tokens", &tokens),
-            ] {
-                if !path.exists() {
-                    return Err(SttError::Connection(format!(
-                        "{name} not found: {}",
-                        path.display()
-                    )));
-                }
-            }
-
-            info!(model_dir = %dir.display(), "loading sherpa streaming STT");
+            info!(
+                model_dir = %config.model_dir.display(),
+                encoder = %encoder.display(),
+                "loading sherpa streaming STT"
+            );
 
             let (msg_tx, msg_rx) = std::sync::mpsc::channel::<SherpaMsg>();
 
@@ -276,5 +256,109 @@ impl SpeechToText for SherpaStt {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "sherpa"))]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use pronghorn_audio::{AudioFormat, AudioFrame};
+    use std::path::PathBuf;
+
+    fn silence_frame() -> AudioFrame {
+        AudioFrame::new(AudioFormat::SPEECH, Bytes::from(vec![0u8; 640]))
+    }
+
+    fn test_model_config() -> Option<crate::config::SherpaConfig> {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let config = crate::config::SherpaConfig {
+            model_dir: workspace_root
+                .join("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"),
+        };
+        if config.model_dir.exists() {
+            Some(config)
+        } else {
+            eprintln!(
+                "skipping: model dir not found at {}",
+                config.model_dir.display()
+            );
+            None
+        }
+    }
+
+    /// Test that the OnlineRecognizer can be created with the streaming model.
+    /// This catches FFI struct layout mismatches that cause segfaults.
+    #[test]
+    fn online_recognizer_creates_without_segfault() {
+        use sherpa_rs::online_recognizer::{OnlineRecognizer, OnlineRecognizerConfig};
+
+        let Some(config) = test_model_config() else {
+            return;
+        };
+        let (encoder, decoder, joiner, tokens) = config.resolve_model_files().unwrap();
+
+        let recognizer_config = OnlineRecognizerConfig {
+            encoder: encoder.to_string_lossy().into(),
+            decoder: decoder.to_string_lossy().into(),
+            joiner: joiner.to_string_lossy().into(),
+            tokens: tokens.to_string_lossy().into(),
+            num_threads: Some(1),
+            debug: true,
+            ..Default::default()
+        };
+
+        let recognizer =
+            OnlineRecognizer::new(recognizer_config).expect("failed to create recognizer");
+        let stream = recognizer.create_stream().expect("failed to create stream");
+
+        // Feed 1 second of silence
+        let silence: Vec<f32> = vec![0.0; 16000];
+        stream.accept_waveform(16000, &silence);
+
+        while recognizer.is_ready(&stream) {
+            recognizer.decode(&stream);
+        }
+
+        let result = recognizer.get_result(&stream);
+        eprintln!("recognizer result for silence: {:?}", result);
+    }
+
+    /// Test SherpaStt streaming transcription end-to-end via the SpeechToText trait.
+    #[tokio::test]
+    async fn streaming_stt_produces_final_transcript() {
+        let Some(config) = test_model_config() else {
+            return;
+        };
+        let stt = SherpaStt::new(&config).expect("failed to create SherpaStt");
+
+        let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+        let (transcript_tx, mut transcript_rx) = mpsc::channel::<Transcript>(16);
+
+        let stt_handle = tokio::spawn(async move { stt.transcribe(audio_rx, transcript_tx).await });
+
+        // Send 50 frames of silence (~1 second) then close
+        for _ in 0..50 {
+            audio_tx.send(silence_frame()).await.unwrap();
+        }
+        drop(audio_tx);
+
+        stt_handle.await.unwrap().unwrap();
+
+        // Should get at least a final transcript
+        let mut got_final = false;
+        while let Some(transcript) = transcript_rx.recv().await {
+            if transcript.is_final {
+                got_final = true;
+                eprintln!("final transcript: {:?}", transcript.text);
+                break;
+            }
+        }
+        assert!(got_final, "expected a final transcript");
     }
 }

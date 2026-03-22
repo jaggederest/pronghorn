@@ -36,18 +36,55 @@ pub enum SttBackend {
 /// Uses the Online (streaming) Recognizer for frame-by-frame transcription
 /// with partial results. Requires a streaming-capable model (e.g. Zipformer
 /// transducer trained with causal attention).
+///
+/// The directory must contain: encoder, decoder, joiner ONNX files and tokens.txt.
+/// File discovery is automatic — looks for `*encoder*.onnx`, `*decoder*.onnx`, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SherpaConfig {
-    /// Directory containing encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
+    /// Directory containing the streaming model files.
     pub model_dir: PathBuf,
 }
 
 impl Default for SherpaConfig {
     fn default() -> Self {
         Self {
-            model_dir: PathBuf::from("models/sherpa-zipformer-en-20m"),
+            model_dir: PathBuf::from("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"),
         }
+    }
+}
+
+impl SherpaConfig {
+    /// Find a model file by glob pattern within model_dir.
+    /// Prefers int8 quantized models if available, falls back to fp32.
+    fn find_model_file(&self, pattern: &str) -> Option<PathBuf> {
+        let full_pattern = self.model_dir.join(pattern);
+        let mut matches: Vec<PathBuf> = glob::glob(&full_pattern.to_string_lossy())
+            .ok()?
+            .filter_map(|r| r.ok())
+            .collect();
+        // Sort so int8 comes first (alphabetically "int8" < "onnx" without int8)
+        matches.sort();
+        matches.into_iter().next()
+    }
+
+    /// Resolve the encoder, decoder, joiner, and tokens paths from model_dir.
+    /// Returns (encoder, decoder, joiner, tokens) or an error describing what's missing.
+    pub fn resolve_model_files(&self) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
+        let encoder = self
+            .find_model_file("*encoder*.onnx")
+            .ok_or_else(|| format!("no *encoder*.onnx in {}", self.model_dir.display()))?;
+        let decoder = self
+            .find_model_file("*decoder*.onnx")
+            .ok_or_else(|| format!("no *decoder*.onnx in {}", self.model_dir.display()))?;
+        let joiner = self
+            .find_model_file("*joiner*.onnx")
+            .ok_or_else(|| format!("no *joiner*.onnx in {}", self.model_dir.display()))?;
+        let tokens = self.model_dir.join("tokens.txt");
+        if !tokens.exists() {
+            return Err(format!("no tokens.txt in {}", self.model_dir.display()));
+        }
+        Ok((encoder, decoder, joiner, tokens))
     }
 }
 
