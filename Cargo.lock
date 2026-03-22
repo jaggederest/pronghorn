@@ -204,7 +204,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "log",
@@ -3249,7 +3249,7 @@ dependencies = [
 [[package]]
 name = "sherpa-rs"
 version = "0.6.8"
-source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#d1c14eecbfa7f4aa3c3e97e8896ed5231fca333d"
+source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#29737edfa61b4c23a8150b87faf4863dc8093031"
 dependencies = [
  "eyre",
  "hound",
@@ -3260,7 +3260,7 @@ dependencies = [
 [[package]]
 name = "sherpa-rs-sys"
 version = "0.6.8"
-source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#d1c14eecbfa7f4aa3c3e97e8896ed5231fca333d"
+source = "git+https://github.com/jaggederest/sherpa-rs?branch=online-recognizer#29737edfa61b4c23a8150b87faf4863dc8093031"
 dependencies = [
  "bindgen",
  "bzip2",
