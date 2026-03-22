@@ -1,7 +1,7 @@
 use pronghorn_audio::AudioFrame;
 use tokio::sync::mpsc;
 #[cfg(feature = "sherpa")]
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::config::SherpaConfig;
 use crate::stt::{SpeechToText, SttError, Transcript};
@@ -118,6 +118,8 @@ fn run_inference_thread(
     let mut transcript_tx: Option<mpsc::Sender<Transcript>> = None;
     let mut stream = None;
     let mut last_text = String::new();
+    let mut chunk_count = 0u32;
+    let mut total_fed = 0usize;
 
     while let Ok(msg) = msg_rx.recv() {
         match msg {
@@ -128,6 +130,8 @@ fn run_inference_thread(
                         stream = Some(s);
                         transcript_tx = Some(tx);
                         last_text.clear();
+                        chunk_count = 0;
+                        total_fed = 0;
                         tracing::debug!("new streaming session started");
                     }
                     Err(e) => {
@@ -145,13 +149,33 @@ fn run_inference_thread(
                     continue;
                 };
 
+                chunk_count += 1;
+                total_fed += samples.len();
+                if chunk_count <= 3 || chunk_count % 25 == 0 {
+                    let rms: f32 =
+                        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                    tracing::debug!(
+                        chunk = chunk_count,
+                        samples = samples.len(),
+                        total_fed,
+                        rms,
+                        "feeding audio to recognizer"
+                    );
+                }
+
                 s.accept_waveform(16000, &samples);
 
+                let mut decoded = 0;
                 while recognizer.is_ready(s) {
                     recognizer.decode(s);
+                    decoded += 1;
+                }
+                if decoded > 0 {
+                    tracing::debug!(decoded, "decoded chunks");
                 }
 
                 let text = recognizer.get_result(s).trim().to_string();
+                trace!(text = %text, chunk = chunk_count, "recognizer state");
                 if !text.is_empty() && text != last_text {
                     debug!(text = %text, "partial transcript");
                     last_text.clone_from(&text);
@@ -167,11 +191,15 @@ fn run_inference_thread(
                     continue;
                 };
 
+                debug!(chunk_count, total_fed, "InputFinished, flushing recognizer");
                 s.input_finished();
 
+                let mut final_decoded = 0;
                 while recognizer.is_ready(s) {
                     recognizer.decode(s);
+                    final_decoded += 1;
                 }
+                debug!(final_decoded, "final decode cycles after input_finished");
 
                 let text = recognizer.get_result(s).trim().to_string();
                 tracing::info!(text = %text, "final transcript");

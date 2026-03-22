@@ -2,7 +2,7 @@
 sample_rate = 16000
 channels = 1
 sample_size = 2
-preroll_frames = 15
+preroll_frames = 80
 
 [wake]
 enabled = true

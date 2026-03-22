@@ -26,6 +26,7 @@ pub fn create_vad(config: &VadConfig) -> Result<sherpa_rs::silero_vad::SileroVad
         model: model_path,
         min_silence_duration: config.min_silence_duration,
         min_speech_duration: config.min_speech_duration,
+        max_speech_duration: 15.0, // match satellite hard timeout
         threshold: config.threshold,
         sample_rate: 16000,
         window_size: 512,

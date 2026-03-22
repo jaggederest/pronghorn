@@ -177,6 +177,17 @@ async fn run_pipeline(
 
     if final_text.is_empty() {
         debug!(session_id, "empty transcript, skipping TTS");
+        // Still send StopSpeaking so satellite returns to Idle
+        transport
+            .send_to(
+                &Packet::Control(Control {
+                    session_id,
+                    control_type: ControlType::StopSpeaking,
+                    payload: Bytes::new(),
+                }),
+                remote_addr,
+            )
+            .await?;
         return Ok(());
     }
 
@@ -260,8 +271,10 @@ async fn jitter_to_frames_with_vad(
             match jb.pop() {
                 Some(d) => {
                     stall_count = 0;
-
-                    // Feed VAD with f32 samples
+                    // Feed VAD with all frames (including pre-roll).
+                    // Pre-roll silence won't trigger VAD because there's no
+                    // speech→silence transition. VAD fires after it sees speech
+                    // followed by min_silence_duration of silence.
                     let samples = i16_bytes_to_f32(&d.payload);
                     vad.accept_waveform(samples);
 

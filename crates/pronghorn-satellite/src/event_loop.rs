@@ -157,21 +157,17 @@ pub async fn run_satellite(
                         server_addr,
                     ).await?;
 
-                    // Send the tail of the pre-roll buffer. Most of the buffer
-                    // contains the wake word, so we only send the last few frames
-                    // which may capture the start of the actual command.
+                    // Send the entire pre-roll buffer. It contains the wake word
+                    // plus any command audio that followed. The wake word text is
+                    // stripped from the transcript on the server side.
                     sequence = 0;
                     timestamp = 0;
                     let preroll = ring.drain();
-                    let keep_frames = 6; // ~120ms of trailing audio
-                    let skip = preroll.len().saturating_sub(keep_frames);
                     debug!(
-                        total_preroll = preroll.len(),
-                        skipped = skip,
-                        sending = preroll.len() - skip,
-                        "sending tail of pre-roll"
+                        preroll_frames = preroll.len(),
+                        "sending full pre-roll"
                     );
-                    for frame in preroll.into_iter().skip(skip) {
+                    for frame in preroll.into_iter() {
                         let pkt = Packet::Audio(AudioData {
                             session_id,
                             sequence,
