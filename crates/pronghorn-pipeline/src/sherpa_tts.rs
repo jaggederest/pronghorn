@@ -110,52 +110,65 @@ impl TextToSpeech for SherpaTts {
         text: &str,
         audio_tx: mpsc::Sender<AudioFrame>,
     ) -> Result<(), TtsError> {
-        info!(text_len = text.len(), "sherpa kokoro synthesizing");
+        let sentences = split_sentences(text);
+        info!(
+            text_len = text.len(),
+            sentences = sentences.len(),
+            "sherpa kokoro synthesizing (sentence-streaming)"
+        );
 
         #[cfg(feature = "sherpa")]
         {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            self.request_tx
-                .send(TtsRequest {
-                    text: text.to_string(),
-                    reply: reply_tx,
-                })
-                .map_err(|_| TtsError::Synthesis("sherpa TTS thread gone".into()))?;
+            for (i, sentence) in sentences.iter().enumerate() {
+                let (reply_tx, reply_rx) = oneshot::channel();
+                self.request_tx
+                    .send(TtsRequest {
+                        text: sentence.to_string(),
+                        reply: reply_tx,
+                    })
+                    .map_err(|_| TtsError::Synthesis("sherpa TTS thread gone".into()))?;
 
-            let (samples, sample_rate) = reply_rx
-                .await
-                .map_err(|_| TtsError::Synthesis("sherpa TTS thread dropped reply".into()))?
-                .map_err(TtsError::Synthesis)?;
+                let (samples, sample_rate) = reply_rx
+                    .await
+                    .map_err(|_| TtsError::Synthesis("sherpa TTS thread dropped reply".into()))?
+                    .map_err(TtsError::Synthesis)?;
 
-            info!(
-                samples = samples.len(),
-                sample_rate,
-                duration_ms = samples.len() as u64 * 1000 / sample_rate as u64,
-                "sherpa kokoro synthesis complete, resampling"
-            );
-
-            // Resample to 16kHz if needed (Kokoro outputs at 24kHz)
-            let samples_16k = if sample_rate != 16_000 {
-                let mut resampler = crate::resample::Resampler::new_24k_to_16k();
-                resampler.process(&samples)
-            } else {
-                samples
-            };
-
-            // Convert f32 → i16 PCM and chunk into 20ms frames
-            let samples_i16: Vec<i16> = samples_16k
-                .iter()
-                .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                .collect();
-
-            let frame_samples = 320;
-            for chunk in samples_i16.chunks(frame_samples) {
-                let pcm_bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
-                let frame = AudioFrame::new(
-                    pronghorn_audio::AudioFormat::SPEECH,
-                    bytes::Bytes::from(pcm_bytes),
+                info!(
+                    sentence = i + 1,
+                    total = sentences.len(),
+                    samples = samples.len(),
+                    duration_ms = samples.len() as u64 * 1000 / sample_rate as u64,
+                    "sentence synthesized, streaming frames"
                 );
-                if audio_tx.send(frame).await.is_err() {
+
+                // Resample to 16kHz if needed (Kokoro outputs at 24kHz)
+                let samples_16k = if sample_rate != 16_000 {
+                    let mut resampler = crate::resample::Resampler::new_24k_to_16k();
+                    resampler.process(&samples)
+                } else {
+                    samples
+                };
+
+                // Convert f32 → i16 PCM and chunk into 20ms frames
+                let samples_i16: Vec<i16> = samples_16k
+                    .iter()
+                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                    .collect();
+
+                let frame_samples = 320;
+                let mut aborted = false;
+                for chunk in samples_i16.chunks(frame_samples) {
+                    let pcm_bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
+                    let frame = AudioFrame::new(
+                        pronghorn_audio::AudioFormat::SPEECH,
+                        bytes::Bytes::from(pcm_bytes),
+                    );
+                    if audio_tx.send(frame).await.is_err() {
+                        aborted = true;
+                        break;
+                    }
+                }
+                if aborted {
                     break;
                 }
             }
@@ -168,5 +181,86 @@ impl TextToSpeech for SherpaTts {
         }
 
         Ok(())
+    }
+}
+
+/// Split text into sentences on `.`, `!`, `?` followed by whitespace or end-of-string.
+/// Punctuation stays attached to the preceding sentence (Kokoro needs it for intonation).
+pub fn split_sentences(text: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'.' || b == b'!' || b == b'?' {
+            let end = i + 1;
+            // Accept if next char is whitespace or end of string
+            if end >= bytes.len() || bytes[end].is_ascii_whitespace() {
+                let sentence = text[start..end].trim();
+                if !sentence.is_empty() {
+                    sentences.push(sentence);
+                }
+                start = end;
+            }
+        }
+    }
+
+    // Remaining text without trailing punctuation
+    let remainder = text[start..].trim();
+    if !remainder.is_empty() {
+        sentences.push(remainder);
+    }
+
+    // If no splits were made, return the whole text as one sentence
+    if sentences.is_empty() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            sentences.push(trimmed);
+        }
+    }
+
+    sentences
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_simple_sentences() {
+        let text = "Hello world. How are you? I am fine!";
+        let sentences = split_sentences(text);
+        assert_eq!(
+            sentences,
+            vec!["Hello world.", "How are you?", "I am fine!"]
+        );
+    }
+
+    #[test]
+    fn split_no_punctuation() {
+        let text = "Hello world";
+        let sentences = split_sentences(text);
+        assert_eq!(sentences, vec!["Hello world"]);
+    }
+
+    #[test]
+    fn split_single_sentence() {
+        let text = "Just one sentence.";
+        let sentences = split_sentences(text);
+        assert_eq!(sentences, vec!["Just one sentence."]);
+    }
+
+    #[test]
+    fn split_abbreviation_not_split() {
+        // "Mr." shouldn't split because 'M' follows the period (not whitespace)
+        let text = "Mr.Smith went home.";
+        let sentences = split_sentences(text);
+        assert_eq!(sentences, vec!["Mr.Smith went home."]);
+    }
+
+    #[test]
+    fn split_empty_text() {
+        assert!(split_sentences("").is_empty());
+        assert!(split_sentences("   ").is_empty());
     }
 }

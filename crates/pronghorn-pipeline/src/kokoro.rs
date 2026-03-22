@@ -130,44 +130,60 @@ impl TextToSpeech for KokoroTts {
         text: &str,
         audio_tx: mpsc::Sender<AudioFrame>,
     ) -> Result<(), TtsError> {
-        info!(text_len = text.len(), "kokoro synthesizing");
+        let sentences = crate::sherpa_tts::split_sentences(text);
+        info!(
+            text_len = text.len(),
+            sentences = sentences.len(),
+            "kokoro synthesizing (sentence-streaming)"
+        );
 
         #[cfg(feature = "kokoro")]
         {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            self.request_tx
-                .send(SynthesisRequest {
-                    text: text.to_string(),
-                    reply: reply_tx,
-                })
-                .map_err(|_| TtsError::Synthesis("kokoro inference thread gone".into()))?;
+            for (i, sentence) in sentences.iter().enumerate() {
+                let (reply_tx, reply_rx) = oneshot::channel();
+                self.request_tx
+                    .send(SynthesisRequest {
+                        text: sentence.to_string(),
+                        reply: reply_tx,
+                    })
+                    .map_err(|_| TtsError::Synthesis("kokoro inference thread gone".into()))?;
 
-            let samples_24k = reply_rx
-                .await
-                .map_err(|_| TtsError::Synthesis("kokoro inference thread dropped reply".into()))?
-                .map_err(TtsError::Synthesis)?;
+                let samples_24k = reply_rx
+                    .await
+                    .map_err(|_| {
+                        TtsError::Synthesis("kokoro inference thread dropped reply".into())
+                    })?
+                    .map_err(TtsError::Synthesis)?;
 
-            info!(
-                samples_24k = samples_24k.len(),
-                duration_ms = samples_24k.len() as u64 * 1000 / 24_000,
-                "kokoro synthesis complete, resampling"
-            );
+                info!(
+                    sentence = i + 1,
+                    total = sentences.len(),
+                    samples_24k = samples_24k.len(),
+                    duration_ms = samples_24k.len() as u64 * 1000 / 24_000,
+                    "sentence synthesized, streaming frames"
+                );
 
-            // Resample 24kHz → 16kHz
-            let mut resampler = Resampler::new_24k_to_16k();
-            let samples_16k = resampler.process(&samples_24k);
+                // Resample 24kHz → 16kHz
+                let mut resampler = Resampler::new_24k_to_16k();
+                let samples_16k = resampler.process(&samples_24k);
 
-            // Convert f32 → i16 PCM and chunk into 20ms frames
-            let samples_i16: Vec<i16> = samples_16k
-                .iter()
-                .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-                .collect();
+                // Convert f32 → i16 PCM and chunk into 20ms frames
+                let samples_i16: Vec<i16> = samples_16k
+                    .iter()
+                    .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+                    .collect();
 
-            let frame_samples = 320; // 20ms at 16kHz mono
-            for chunk in samples_i16.chunks(frame_samples) {
-                let pcm_bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
-                let frame = AudioFrame::new(AudioFormat::SPEECH, Bytes::from(pcm_bytes));
-                if audio_tx.send(frame).await.is_err() {
+                let frame_samples = 320;
+                let mut aborted = false;
+                for chunk in samples_i16.chunks(frame_samples) {
+                    let pcm_bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
+                    let frame = AudioFrame::new(AudioFormat::SPEECH, Bytes::from(pcm_bytes));
+                    if audio_tx.send(frame).await.is_err() {
+                        aborted = true;
+                        break;
+                    }
+                }
+                if aborted {
                     break;
                 }
             }

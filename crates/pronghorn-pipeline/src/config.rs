@@ -32,6 +32,10 @@ pub enum SttBackend {
 }
 
 /// Configuration for the Sherpa-ONNX streaming STT backend.
+///
+/// Uses the Online (streaming) Recognizer for frame-by-frame transcription
+/// with partial results. Requires a streaming-capable model (e.g. Zipformer
+/// transducer trained with causal attention).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SherpaConfig {
