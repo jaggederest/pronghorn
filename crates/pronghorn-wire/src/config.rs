@@ -16,6 +16,8 @@ pub struct TransportConfig {
     /// Session timeout in milliseconds. Sessions with no activity
     /// for this long are reaped.
     pub session_timeout_ms: u64,
+    /// How often to check for stale sessions, in milliseconds.
+    pub reap_interval_ms: u64,
 }
 
 impl Default for TransportConfig {
@@ -25,6 +27,7 @@ impl Default for TransportConfig {
             jitter_buffer_delay: 3,
             keepalive_interval_ms: 5_000,
             session_timeout_ms: 30_000,
+            reap_interval_ms: 10_000,
         }
     }
 }

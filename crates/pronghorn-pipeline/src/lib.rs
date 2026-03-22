@@ -8,11 +8,12 @@ pub mod sherpa;
 pub mod sherpa_tts;
 pub mod stt;
 pub mod tts;
+pub mod vad;
 pub mod whisper;
 
 pub use config::{
     IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig, SherpaConfig,
-    SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig, WhisperConfig,
+    SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig, VadConfig, WhisperConfig,
 };
 pub use error::PipelineError;
 pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};

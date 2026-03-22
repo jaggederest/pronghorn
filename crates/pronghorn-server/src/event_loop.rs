@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use pronghorn_pipeline::{
-    IntentDispatch, SttDispatch, TtsDispatch, create_intent, create_stt, create_tts,
+    IntentDispatch, SttDispatch, TtsDispatch, VadConfig, create_intent, create_stt, create_tts,
 };
 use pronghorn_wire::{
-    ControlType, Keepalive, PROTOCOL_VERSION, Packet, SessionManager, SessionState, Transport,
-    Welcome,
+    Control, ControlType, Keepalive, PROTOCOL_VERSION, Packet, SessionManager, SessionState,
+    Transport, Welcome,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -31,13 +32,15 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
     info!(backend = ?config.pipeline.intent.backend, "intent ready");
 
     let jitter_delay = config.transport.jitter_buffer_delay;
+    let vad_config = config.pipeline.vad.clone();
     let mut sessions = SessionManager::new();
     let mut handles: HashMap<u32, SessionHandle> = HashMap::new();
 
     let keepalive_dur = Duration::from_millis(config.transport.keepalive_interval_ms);
     let session_timeout = Duration::from_millis(config.transport.session_timeout_ms);
     let mut keepalive_timer = tokio::time::interval(keepalive_dur);
-    let mut reap_timer = tokio::time::interval(Duration::from_secs(10));
+    let mut reap_timer =
+        tokio::time::interval(Duration::from_millis(config.transport.reap_interval_ms));
 
     // Don't fire immediately on first tick
     keepalive_timer.tick().await;
@@ -56,6 +59,7 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
                     &tts,
                     &intent,
                     jitter_delay,
+                    &vad_config,
                     &transport,
                     &mut sessions,
                     &mut handles,
@@ -69,6 +73,15 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
                 let stale = sessions.reap_stale(deadline);
                 for session in &stale {
                     info!(session_id = session.id, "reaped stale session");
+                    // Notify satellite so it can reconnect instead of staying stuck
+                    let _ = transport.send_to(
+                        &Packet::Control(Control {
+                            session_id: session.id,
+                            control_type: ControlType::SessionEnd,
+                            payload: Bytes::new(),
+                        }),
+                        session.remote_addr,
+                    ).await;
                     if let Some(handle) = handles.remove(&session.id) {
                         handle.task.abort();
                     }
@@ -89,6 +102,7 @@ async fn handle_packet(
     tts: &Arc<TtsDispatch>,
     intent: &Arc<IntentDispatch>,
     jitter_delay: u16,
+    vad_config: &VadConfig,
     transport: &Arc<Transport>,
     sessions: &mut SessionManager,
     handles: &mut HashMap<u32, SessionHandle>,
@@ -140,12 +154,18 @@ async fn handle_packet(
                             Arc::clone(transport),
                             session.remote_addr,
                             jitter_delay,
+                            vad_config.clone(),
                         );
                         handles.insert(ctrl.session_id, handle);
                     }
                 }
                 ControlType::StopListening => {
-                    info!(session_id = ctrl.session_id, "stop listening");
+                    // Satellite timeout fallback: satellite hit hard cap and sent StopListening.
+                    // Drop audio_tx so the orchestrator's jitter_to_frames sees EOF.
+                    info!(
+                        session_id = ctrl.session_id,
+                        "stop listening (satellite timeout)"
+                    );
                     if let Some(handle) = handles.remove(&ctrl.session_id) {
                         drop(handle.audio_tx);
                         let (dummy_tx, _) = mpsc::channel(1);
@@ -207,7 +227,14 @@ fn session_addr_matches(
 }
 
 async fn send_keepalives(transport: &Transport, sessions: &SessionManager) {
-    let _ = (transport, sessions);
+    for session in sessions.iter() {
+        let pkt = Packet::Keepalive(Keepalive {
+            session_id: session.id,
+        });
+        if let Err(e) = transport.send_to(&pkt, session.remote_addr).await {
+            debug!(session_id = session.id, %e, "failed to send keepalive");
+        }
+    }
 }
 
 fn collect_completed(handles: &mut HashMap<u32, SessionHandle>, sessions: &mut SessionManager) {

@@ -9,6 +9,7 @@ pub struct PipelineConfig {
     pub stt: SttConfig,
     pub tts: TtsConfig,
     pub intent: IntentConfig,
+    pub vad: VadConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -166,6 +167,34 @@ impl Default for OllamaConfig {
             url: "http://localhost:11434".into(),
             model: "gemma3:1b".into(),
             system_prompt: "You are Jarvis, a helpful voice assistant. Keep responses brief and conversational (1-2 sentences).".into(),
+        }
+    }
+}
+
+/// Configuration for server-side Silero VAD endpoint detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VadConfig {
+    /// Whether to enable server-side Silero VAD for endpoint detection.
+    pub enabled: bool,
+    /// Path to silero_vad.onnx model file.
+    pub model_path: PathBuf,
+    /// Seconds of silence after speech to trigger endpoint.
+    pub min_silence_duration: f32,
+    /// Minimum speech duration before endpoint detection activates.
+    pub min_speech_duration: f32,
+    /// VAD detection threshold (0.0–1.0).
+    pub threshold: f32,
+}
+
+impl Default for VadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model_path: PathBuf::from("models/silero_vad.onnx"),
+            min_silence_duration: 0.5,
+            min_speech_duration: 0.25,
+            threshold: 0.5,
         }
     }
 }

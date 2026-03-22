@@ -5,17 +5,17 @@ use bytes::Bytes;
 use pronghorn_audio::{AudioFormat, AudioFrame};
 use pronghorn_pipeline::{
     IntentDispatch, IntentProcessor, SpeechToText, SttDispatch, TextToSpeech, Transcript,
-    TtsDispatch,
+    TtsDispatch, VadConfig,
 };
 use pronghorn_wire::{AudioData, Control, ControlType, JitterBuffer, Packet, Transport};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Handle to an active session's pipeline. Held by the event loop.
 pub struct SessionHandle {
     /// Send audio packets from the satellite into the pipeline.
-    /// Drop this to signal end-of-stream (StopListening).
+    /// Drop this to signal end-of-stream (satellite timeout fallback).
     pub audio_tx: mpsc::Sender<AudioData>,
     /// The orchestrator task — join to detect completion.
     pub task: JoinHandle<()>,
@@ -23,7 +23,8 @@ pub struct SessionHandle {
 
 /// Spawn a per-session pipeline orchestrator.
 ///
-/// Wires: AudioData → JitterBuffer → STT → Intent → TTS → send back
+/// Wires: AudioData → JitterBuffer (+VAD) → STT → Intent → TTS → send back
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_orchestrator(
     session_id: u32,
     stt: Arc<SttDispatch>,
@@ -32,6 +33,7 @@ pub fn spawn_orchestrator(
     transport: Arc<Transport>,
     remote_addr: SocketAddr,
     jitter_delay: u16,
+    vad_config: VadConfig,
 ) -> SessionHandle {
     let (audio_data_tx, audio_data_rx) = mpsc::channel::<AudioData>(64);
 
@@ -45,6 +47,7 @@ pub fn spawn_orchestrator(
             intent,
             transport,
             remote_addr,
+            vad_config,
         )
         .await
         {
@@ -68,18 +71,90 @@ async fn run_pipeline(
     intent: Arc<IntentDispatch>,
     transport: Arc<Transport>,
     remote_addr: SocketAddr,
+    vad_config: VadConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Channel: jitter buffer → STT
     let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(64);
     // Channel: STT → orchestrator
     let (transcript_tx, mut transcript_rx) = mpsc::channel::<Transcript>(8);
 
-    // Task: JitterBuffer → AudioFrame
-    let jitter_handle = tokio::spawn(jitter_to_frames(
-        audio_data_rx,
-        audio_frame_tx,
-        jitter_delay,
-    ));
+    // Create Silero VAD for this session (if enabled and sherpa feature is on)
+    let (vad_done_tx, vad_done_rx) = oneshot::channel::<()>();
+
+    #[cfg(feature = "sherpa")]
+    let vad = if vad_config.enabled {
+        match pronghorn_pipeline::vad::create_vad(&vad_config) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!(session_id, %e, "failed to create VAD, falling back to no-VAD mode");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    #[cfg(not(feature = "sherpa"))]
+    let vad: Option<()> = {
+        let _ = &vad_config;
+        None
+    };
+
+    // Task: JitterBuffer → AudioFrame (with optional VAD endpoint detection)
+    #[cfg(feature = "sherpa")]
+    let jitter_handle = if let Some(vad_instance) = vad {
+        tokio::spawn(jitter_to_frames_with_vad(
+            audio_data_rx,
+            audio_frame_tx,
+            jitter_delay,
+            vad_instance,
+            vad_done_tx,
+        ))
+    } else {
+        // No VAD: behave as before (satellite timeout drives StopListening)
+        drop(vad_done_tx);
+        tokio::spawn(jitter_to_frames(
+            audio_data_rx,
+            audio_frame_tx,
+            jitter_delay,
+        ))
+    };
+
+    #[cfg(not(feature = "sherpa"))]
+    let jitter_handle = {
+        drop(vad_done_tx);
+        let _ = vad;
+        tokio::spawn(jitter_to_frames(
+            audio_data_rx,
+            audio_frame_tx,
+            jitter_delay,
+        ))
+    };
+
+    // Fire-and-forget task: send StopListening to satellite when VAD detects speech end
+    let transport_vad = Arc::clone(&transport);
+    tokio::spawn(async move {
+        if vad_done_rx.await.is_ok() {
+            info!(
+                session_id,
+                "VAD: speech ended, sending StopListening to satellite"
+            );
+            if let Err(e) = transport_vad
+                .send_to(
+                    &Packet::Control(Control {
+                        session_id,
+                        control_type: ControlType::StopListening,
+                        payload: Bytes::new(),
+                    }),
+                    remote_addr,
+                )
+                .await
+            {
+                warn!(session_id, %e, "failed to send StopListening to satellite");
+            }
+        }
+        // If vad_done_rx errors, VAD never fired (satellite timeout handled it) — no-op
+    });
 
     // Task: STT (shared backend via Arc)
     let stt_clone = Arc::clone(&stt);
@@ -159,18 +234,90 @@ async fn run_pipeline(
     Ok(())
 }
 
-/// Adapter: receives AudioData packets, reorders via JitterBuffer, outputs AudioFrames.
+/// Adapter with Silero VAD: receives AudioData packets, reorders via JitterBuffer,
+/// outputs AudioFrames, and detects end-of-speech via Silero VAD.
 ///
-/// Handles packet loss by skipping missing sequence numbers after a timeout.
-/// Flushes all buffered packets when the input stream closes.
+/// When VAD detects speech→silence, signals via `vad_done_tx` and stops forwarding.
+/// The orchestrator sends StopListening to the satellite in response.
+#[cfg(feature = "sherpa")]
+async fn jitter_to_frames_with_vad(
+    mut audio_rx: mpsc::Receiver<AudioData>,
+    frame_tx: mpsc::Sender<AudioFrame>,
+    playout_delay: u16,
+    mut vad: pronghorn_pipeline::vad::SileroVad,
+    vad_done_tx: oneshot::Sender<()>,
+) {
+    use pronghorn_pipeline::vad::i16_bytes_to_f32;
+
+    let mut jb = JitterBuffer::new(playout_delay);
+    let max_skip_wait = 5u32;
+    let mut stall_count = 0u32;
+
+    while let Some(data) = audio_rx.recv().await {
+        jb.push(data);
+
+        loop {
+            match jb.pop() {
+                Some(d) => {
+                    stall_count = 0;
+
+                    // Feed VAD with f32 samples
+                    let samples = i16_bytes_to_f32(&d.payload);
+                    vad.accept_waveform(samples);
+
+                    // Forward frame to STT
+                    if frame_tx
+                        .send(AudioFrame::new(AudioFormat::SPEECH, d.payload))
+                        .await
+                        .is_err()
+                    {
+                        return; // downstream closed
+                    }
+
+                    // Check if VAD detected end of speech (completed speech segment)
+                    if !vad.is_empty() {
+                        info!("VAD: end of speech detected");
+                        vad.pop(); // clear the segment buffer
+                        let _ = vad_done_tx.send(());
+                        // Drop frame_tx by returning — STT sees EOF
+                        return;
+                    }
+                }
+                None => {
+                    if jb.is_playing() && jb.buffered() > 0 {
+                        stall_count += 1;
+                        if stall_count >= max_skip_wait {
+                            debug!(
+                                next_seq = ?jb.next_seq(),
+                                buffered = jb.buffered(),
+                                "skipping lost packet"
+                            );
+                            jb.skip();
+                            stall_count = 0;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Channel closed (satellite timeout case): flush remaining buffered packets
+    flush_jitter_buffer(&mut jb, &frame_tx).await;
+    // vad_done_tx dropped without sending — no StopListening needed (satellite already sent it)
+}
+
+/// Adapter without VAD: receives AudioData packets, reorders via JitterBuffer, outputs AudioFrames.
+///
+/// Used when VAD is disabled or sherpa feature is off. Satellite drives StopListening.
 async fn jitter_to_frames(
     mut audio_rx: mpsc::Receiver<AudioData>,
     frame_tx: mpsc::Sender<AudioFrame>,
     playout_delay: u16,
 ) {
     let mut jb = JitterBuffer::new(playout_delay);
-    // Max consecutive pop() failures before we skip the missing packet
-    let max_skip_wait = 5u32; // ~5 packets worth of waiting (~100ms at 20ms/pkt)
+    let max_skip_wait = 5u32;
     let mut stall_count = 0u32;
 
     while let Some(data) = audio_rx.recv().await {
@@ -185,12 +332,10 @@ async fn jitter_to_frames(
                         .await
                         .is_err()
                     {
-                        return; // downstream closed
+                        return;
                     }
                 }
                 None => {
-                    // No packet at next_seq. If we have buffered packets
-                    // beyond the gap, skip the missing one after waiting.
                     if jb.is_playing() && jb.buffered() > 0 {
                         stall_count += 1;
                         if stall_count >= max_skip_wait {
@@ -201,16 +346,20 @@ async fn jitter_to_frames(
                             );
                             jb.skip();
                             stall_count = 0;
-                            continue; // try popping again after skip
+                            continue;
                         }
                     }
-                    break; // nothing more to pop right now
+                    break;
                 }
             }
         }
     }
 
-    // Flush: skip gaps and drain all remaining buffered packets
+    flush_jitter_buffer(&mut jb, &frame_tx).await;
+}
+
+/// Flush all remaining buffered packets from the jitter buffer, skipping gaps.
+async fn flush_jitter_buffer(jb: &mut JitterBuffer, frame_tx: &mpsc::Sender<AudioFrame>) {
     loop {
         match jb.pop() {
             Some(d) => {
@@ -224,14 +373,13 @@ async fn jitter_to_frames(
             }
             None => {
                 if jb.buffered() > 0 {
-                    jb.skip(); // skip the gap
+                    jb.skip();
                     continue;
                 }
-                break; // truly empty
+                break;
             }
         }
     }
-    // drop frame_tx → STT sees channel close
 }
 
 #[cfg(test)]

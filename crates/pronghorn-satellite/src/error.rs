@@ -14,6 +14,9 @@ pub enum SatelliteError {
     #[error("server handshake failed: expected Welcome packet")]
     HandshakeFailed,
 
+    #[error("server did not respond within timeout")]
+    ServerTimeout,
+
     #[error("failed to spawn wake word thread: {0}")]
     WakeThread(#[from] std::io::Error),
 }

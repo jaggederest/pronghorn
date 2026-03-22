@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use pronghorn_audio::AudioFrame;
 use pronghorn_satellite::audio_io;
 use pronghorn_satellite::config::SatelliteConfig;
 use pronghorn_satellite::event_loop;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() {
@@ -25,32 +26,44 @@ async fn main() {
         "config loaded"
     );
 
-    // Audio channels
-    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
-    let (speaker_tx, speaker_rx) = mpsc::channel::<AudioFrame>(64);
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(30);
 
-    // Start audio capture (mic → audio_tx)
-    let _capture_stream = match audio_io::start_capture(audio_tx) {
-        Ok(stream) => Some(stream),
-        Err(e) => {
-            eprintln!("warning: failed to start audio capture: {e}");
-            eprintln!("running without mic input (no audio frames will be produced)");
-            None
+    loop {
+        // Create fresh audio channels for each connection attempt.
+        // Audio capture/playback streams hold the other halves and are
+        // dropped+recreated each iteration so the mic/speaker reset cleanly.
+        let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+        let (speaker_tx, speaker_rx) = mpsc::channel::<AudioFrame>(64);
+
+        let _capture_stream = match audio_io::start_capture(audio_tx) {
+            Ok(stream) => Some(stream),
+            Err(e) => {
+                warn!(%e, "failed to start audio capture, running without mic");
+                None
+            }
+        };
+
+        let _playback_stream = match audio_io::start_playback(speaker_rx) {
+            Ok(stream) => Some(stream),
+            Err(e) => {
+                warn!(%e, "failed to start audio playback, running without speaker");
+                None
+            }
+        };
+
+        info!("connecting to server...");
+        match event_loop::run_satellite(config.clone(), audio_rx, speaker_tx).await {
+            Ok(()) => {
+                // Clean shutdown (audio source closed) — exit the process
+                info!("satellite shut down cleanly");
+                break;
+            }
+            Err(e) => {
+                warn!(%e, backoff_ms = backoff.as_millis() as u64, "satellite error, reconnecting");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+            }
         }
-    };
-
-    // Start audio playback (speaker_rx → speaker)
-    let _playback_stream = match audio_io::start_playback(speaker_rx) {
-        Ok(stream) => Some(stream),
-        Err(e) => {
-            eprintln!("warning: failed to start audio playback: {e}");
-            eprintln!("running without speaker output (TTS audio will be discarded)");
-            None
-        }
-    };
-
-    if let Err(e) = event_loop::run_satellite(config, audio_rx, speaker_tx).await {
-        eprintln!("satellite error: {e}");
-        std::process::exit(1);
     }
 }

@@ -90,6 +90,11 @@ impl SessionManager {
         }
     }
 
+    /// Iterate over all active sessions.
+    pub fn iter(&self) -> impl Iterator<Item = &Session> {
+        self.sessions.values()
+    }
+
     /// Remove all sessions that haven't been seen since `deadline`.
     pub fn reap_stale(&mut self, deadline: Instant) -> Vec<Session> {
         let stale_ids: Vec<u32> = self

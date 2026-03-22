@@ -30,6 +30,12 @@ tokenizer_path = "models/kokoro/tokenizer.json"
 voices_path = "models/kokoro/voices"
 voice = "bm_daniel"
 
+[pipeline.vad]
+model_path = "models/silero_vad.onnx"
+min_silence_duration = 0.5
+min_speech_duration = 0.25
+threshold = 0.5
+
 [pipeline.intent]
 backend = "ollama"
 

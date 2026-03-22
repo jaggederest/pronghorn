@@ -10,4 +10,7 @@ pub enum PipelineError {
 
     #[error("intent error: {0}")]
     Intent(#[from] crate::intent::IntentError),
+
+    #[error("backend error: {0}")]
+    Backend(String),
 }

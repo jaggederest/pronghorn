@@ -5,6 +5,7 @@ use bytes::Bytes;
 use pronghorn_audio::{AudioConfig, AudioFormat, AudioFrame};
 use pronghorn_pipeline::PipelineConfig;
 use pronghorn_satellite::config::{SatelliteConfig, SatelliteTransportConfig};
+use pronghorn_satellite::error::SatelliteError;
 use pronghorn_wake::WakeConfig;
 use pronghorn_wire::TransportConfig;
 use tokio::sync::mpsc;
@@ -42,6 +43,7 @@ async fn satellite_connects_and_handshakes() {
             jitter_buffer_delay: 2,
             keepalive_interval_ms: 60_000,
             session_timeout_ms: 30_000,
+            ..TransportConfig::default()
         },
         pipeline: PipelineConfig::default(),
     };
@@ -127,6 +129,7 @@ async fn satellite_receives_tts_audio() {
             jitter_buffer_delay: 2,
             keepalive_interval_ms: 60_000,
             session_timeout_ms: 30_000,
+            ..TransportConfig::default()
         },
         pipeline: PipelineConfig::default(),
     };
@@ -181,5 +184,151 @@ async fn satellite_receives_tts_audio() {
     // Clean up
     drop(audio_tx);
     let _ = tokio::time::timeout(Duration::from_secs(2), sat_handle).await;
+    server_handle.abort();
+}
+
+/// Satellite detects when the server goes away (no keepalive echo) and returns ServerTimeout.
+#[tokio::test]
+async fn satellite_detects_server_timeout() {
+    // Start server
+    let tmp = pronghorn_wire::Transport::bind(localhost(0)).await.unwrap();
+    let server_addr = tmp.local_addr().unwrap();
+    drop(tmp);
+
+    let server_config = pronghorn_server::config::ServerConfig {
+        audio: AudioConfig::default(),
+        transport: TransportConfig {
+            bind_address: server_addr,
+            keepalive_interval_ms: 100,
+            session_timeout_ms: 60_000,
+            ..TransportConfig::default()
+        },
+        pipeline: PipelineConfig::default(),
+    };
+
+    let server_handle =
+        tokio::spawn(async move { pronghorn_server::event_loop::run_server(server_config).await });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Satellite with short keepalive + timeout for fast test
+    let sat_config = SatelliteConfig {
+        audio: AudioConfig {
+            preroll_frames: 5,
+            ..AudioConfig::default()
+        },
+        wake: WakeConfig::default(),
+        transport: SatelliteTransportConfig {
+            server_address: server_addr,
+            keepalive_interval_ms: 100,
+            server_timeout_ms: 500,
+            ..SatelliteTransportConfig::default()
+        },
+    };
+
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+    let (speaker_tx, _speaker_rx) = mpsc::channel::<AudioFrame>(64);
+
+    let sat_handle = tokio::spawn(async move {
+        pronghorn_satellite::event_loop::run_satellite(sat_config, audio_rx, speaker_tx).await
+    });
+
+    // Give satellite time to handshake + verify it's running
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!sat_handle.is_finished(), "satellite should be connected");
+
+    // Kill the server — satellite should detect timeout
+    server_handle.abort();
+
+    // Feed frames to keep satellite event loop active (it needs audio frames to not
+    // block on audio_rx.recv(); the server timeout branch races with it in select!)
+    let feed_handle = tokio::spawn(async move {
+        loop {
+            if audio_tx.send(silence_frame()).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+
+    // Wait for satellite to detect timeout (500ms server_timeout + margin)
+    let result = tokio::time::timeout(Duration::from_secs(2), sat_handle).await;
+    assert!(result.is_ok(), "satellite should exit within timeout");
+    let sat_result = result.unwrap().unwrap();
+    assert!(
+        matches!(sat_result, Err(SatelliteError::ServerTimeout)),
+        "expected ServerTimeout, got {sat_result:?}"
+    );
+
+    feed_handle.abort();
+}
+
+/// Server sends SessionEnd to satellite when reaping a stale session.
+#[tokio::test]
+async fn satellite_receives_session_end_on_reap() {
+    let tmp = pronghorn_wire::Transport::bind(localhost(0)).await.unwrap();
+    let server_addr = tmp.local_addr().unwrap();
+    drop(tmp);
+
+    // Server with very short session timeout and reap interval
+    let server_config = pronghorn_server::config::ServerConfig {
+        audio: AudioConfig::default(),
+        transport: TransportConfig {
+            bind_address: server_addr,
+            keepalive_interval_ms: 60_000, // server won't send keepalives often
+            session_timeout_ms: 300,       // 300ms timeout
+            reap_interval_ms: 100,         // check every 100ms
+            ..TransportConfig::default()
+        },
+        pipeline: PipelineConfig::default(),
+    };
+
+    let server_handle =
+        tokio::spawn(async move { pronghorn_server::event_loop::run_server(server_config).await });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Satellite with no keepalives (so session goes stale quickly)
+    let sat_config = SatelliteConfig {
+        audio: AudioConfig {
+            preroll_frames: 5,
+            ..AudioConfig::default()
+        },
+        wake: WakeConfig::default(),
+        transport: SatelliteTransportConfig {
+            server_address: server_addr,
+            keepalive_interval_ms: 60_000, // satellite won't send keepalives
+            server_timeout_ms: 60_000,     // satellite won't timeout on its own
+            ..SatelliteTransportConfig::default()
+        },
+    };
+
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioFrame>(64);
+    let (speaker_tx, _speaker_rx) = mpsc::channel::<AudioFrame>(64);
+
+    let sat_handle = tokio::spawn(async move {
+        pronghorn_satellite::event_loop::run_satellite(sat_config, audio_rx, speaker_tx).await
+    });
+
+    // Feed frames to keep satellite alive
+    let feed_handle = tokio::spawn(async move {
+        loop {
+            if audio_tx.send(silence_frame()).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+
+    // Wait for server to reap the session and send SessionEnd (300ms timeout + 100ms reap interval + margin)
+    let result = tokio::time::timeout(Duration::from_secs(2), sat_handle).await;
+    assert!(result.is_ok(), "satellite should exit after SessionEnd");
+    let sat_result = result.unwrap().unwrap();
+    assert!(
+        matches!(sat_result, Err(SatelliteError::ServerTimeout)),
+        "expected ServerTimeout from SessionEnd, got {sat_result:?}"
+    );
+
+    feed_handle.abort();
     server_handle.abort();
 }

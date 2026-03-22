@@ -25,6 +25,7 @@ async fn full_echo_pipeline_over_udp() {
             jitter_buffer_delay: 2,
             keepalive_interval_ms: 60_000,
             session_timeout_ms: 30_000,
+            ..TransportConfig::default()
         },
         pipeline: PipelineConfig::default(),
     };
@@ -142,4 +143,116 @@ async fn recv_with_timeout(transport: &Transport, timeout: Duration) -> Packet {
         Ok(Err(e)) => panic!("recv error: {e}"),
         Err(_) => panic!("recv timed out after {timeout:?}"),
     }
+}
+
+/// Server proactively sends keepalive packets to connected sessions.
+#[tokio::test]
+async fn server_sends_proactive_keepalives() {
+    let server_transport = Transport::bind(localhost(0)).await.unwrap();
+    let server_addr = server_transport.local_addr().unwrap();
+    drop(server_transport);
+
+    let config = pronghorn_server::config::ServerConfig {
+        audio: AudioConfig::default(),
+        transport: TransportConfig {
+            bind_address: server_addr,
+            keepalive_interval_ms: 100, // fast keepalives for testing
+            session_timeout_ms: 60_000,
+            ..TransportConfig::default()
+        },
+        pipeline: PipelineConfig::default(),
+    };
+
+    let server_handle =
+        tokio::spawn(async move { pronghorn_server::event_loop::run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Client handshakes
+    let client = Transport::bind(localhost(0)).await.unwrap();
+    client
+        .send_to(&Packet::Hello(Hello { client_version: 1 }), server_addr)
+        .await
+        .unwrap();
+
+    let (pkt, _) = client.recv_from().await.unwrap();
+    let session_id = match pkt {
+        Packet::Welcome(w) => w.session_id,
+        other => panic!("expected Welcome, got {other:?}"),
+    };
+
+    // Wait and collect packets — should receive at least one server-initiated keepalive
+    let mut keepalive_count = 0;
+    for _ in 0..5 {
+        match tokio::time::timeout(Duration::from_millis(200), client.recv_from()).await {
+            Ok(Ok((Packet::Keepalive(k), _))) => {
+                assert_eq!(k.session_id, session_id);
+                keepalive_count += 1;
+            }
+            _ => break,
+        }
+    }
+
+    assert!(
+        keepalive_count >= 1,
+        "expected at least 1 server keepalive, got {keepalive_count}"
+    );
+
+    server_handle.abort();
+}
+
+/// Server sends SessionEnd when reaping a stale session.
+#[tokio::test]
+async fn server_sends_session_end_on_reap() {
+    let server_transport = Transport::bind(localhost(0)).await.unwrap();
+    let server_addr = server_transport.local_addr().unwrap();
+    drop(server_transport);
+
+    let config = pronghorn_server::config::ServerConfig {
+        audio: AudioConfig::default(),
+        transport: TransportConfig {
+            bind_address: server_addr,
+            keepalive_interval_ms: 60_000, // don't send keepalives (would touch session)
+            session_timeout_ms: 300,       // short timeout
+            reap_interval_ms: 100,         // check frequently
+            ..TransportConfig::default()
+        },
+        pipeline: PipelineConfig::default(),
+    };
+
+    let server_handle =
+        tokio::spawn(async move { pronghorn_server::event_loop::run_server(config).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Client handshakes then goes silent
+    let client = Transport::bind(localhost(0)).await.unwrap();
+    client
+        .send_to(&Packet::Hello(Hello { client_version: 1 }), server_addr)
+        .await
+        .unwrap();
+
+    let (pkt, _) = client.recv_from().await.unwrap();
+    let session_id = match pkt {
+        Packet::Welcome(w) => w.session_id,
+        other => panic!("expected Welcome, got {other:?}"),
+    };
+
+    // Wait for reap (300ms timeout + 100ms reap interval + margin)
+    // Collect packets, expecting SessionEnd
+    let mut got_session_end = false;
+    for _ in 0..10 {
+        match tokio::time::timeout(Duration::from_millis(200), client.recv_from()).await {
+            Ok(Ok((Packet::Control(c), _)))
+                if c.control_type == ControlType::SessionEnd && c.session_id == session_id =>
+            {
+                got_session_end = true;
+                break;
+            }
+            Ok(Ok((Packet::Keepalive(_), _))) => continue, // ignore keepalives
+            _ => continue,
+        }
+    }
+
+    assert!(got_session_end, "expected SessionEnd control packet");
+
+    server_handle.abort();
 }

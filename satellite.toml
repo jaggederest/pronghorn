@@ -20,8 +20,4 @@ hey_jarvis = "models/hey_jarvis.rpw"
 [transport]
 server_address = "127.0.0.1:9999"
 keepalive_interval_ms = 5000
-# VAD settings
-speech_threshold = 200
-silence_duration_ms = 500
 max_stream_duration_ms = 15000
-min_speech_ms = 300
