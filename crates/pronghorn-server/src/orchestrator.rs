@@ -4,7 +4,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use pronghorn_audio::{AudioFormat, AudioFrame};
 use pronghorn_pipeline::{
-    IntentDispatch, IntentProcessor, SpeechToText, SttDispatch, TextToSpeech, Transcript,
+    HaClient, IntentDispatch, IntentProcessor, SpeechToText, SttDispatch, TextToSpeech, Transcript,
     TtsDispatch, VadConfig,
 };
 use pronghorn_wire::{AudioData, Control, ControlType, JitterBuffer, Packet, Transport};
@@ -23,7 +23,7 @@ pub struct SessionHandle {
 
 /// Spawn a per-session pipeline orchestrator.
 ///
-/// Wires: AudioData → JitterBuffer (+VAD) → STT → Intent → TTS → send back
+/// Wires: AudioData → JitterBuffer (+VAD) → STT → Intent → (HA action?) → TTS → send back
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_orchestrator(
     session_id: u32,
@@ -34,6 +34,7 @@ pub fn spawn_orchestrator(
     remote_addr: SocketAddr,
     jitter_delay: u16,
     vad_config: VadConfig,
+    ha_client: Option<Arc<HaClient>>,
 ) -> SessionHandle {
     let (audio_data_tx, audio_data_rx) = mpsc::channel::<AudioData>(64);
 
@@ -48,6 +49,7 @@ pub fn spawn_orchestrator(
             transport,
             remote_addr,
             vad_config,
+            ha_client,
         )
         .await
         {
@@ -72,6 +74,7 @@ async fn run_pipeline(
     transport: Arc<Transport>,
     remote_addr: SocketAddr,
     vad_config: VadConfig,
+    ha_client: Option<Arc<HaClient>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Channel: jitter buffer → STT
     let (audio_frame_tx, audio_frame_rx) = mpsc::channel::<AudioFrame>(64);
@@ -193,7 +196,56 @@ async fn run_pipeline(
 
     // Intent processing
     let response = intent.process(&final_text).await?;
-    info!(session_id, reply = %response.reply_text, "intent response");
+    info!(session_id, reply = %response.reply_text, has_action = response.action.is_some(), "intent response");
+
+    // ── Action dispatch ──────────────────────────────────────────────────────
+    // If the intent resolved to a structured HA service call, fire it now.
+    // reply_text (if non-empty) is spoken as a confirmation phrase afterwards.
+    if let Some(ref action) = response.action {
+        if let Some(ref ha) = ha_client {
+            info!(
+                session_id,
+                domain = %action.domain,
+                service = %action.service,
+                entity_id = %action.entity_id,
+                "dispatching HA call_service"
+            );
+            if let Err(e) = ha
+                .call_service(
+                    &action.domain,
+                    &action.service,
+                    &action.entity_id,
+                    action.data.clone(),
+                )
+                .await
+            {
+                warn!(session_id, %e, "HA call_service failed");
+            }
+        } else {
+            warn!(
+                session_id,
+                domain = %action.domain,
+                service = %action.service,
+                "intent action present but no HA client configured — skipping"
+            );
+        }
+    }
+
+    // TTS reply: confirmation phrase (actions) or full LLM response.
+    // Empty reply_text → no speech, just close the speaking window.
+    if response.reply_text.is_empty() {
+        transport
+            .send_to(
+                &Packet::Control(Control {
+                    session_id,
+                    control_type: ControlType::StopSpeaking,
+                    payload: Bytes::new(),
+                }),
+                remote_addr,
+            )
+            .await?;
+        return Ok(());
+    }
 
     // Send StartSpeaking
     transport
@@ -397,6 +449,13 @@ async fn flush_jitter_buffer(jb: &mut JitterBuffer, frame_tx: &mpsc::Sender<Audi
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use pronghorn_pipeline::{
+        EchoActionIntent, EchoStt, EchoTts, IntentDispatch, SttDispatch, TtsDispatch,
+    };
+    use pronghorn_wire::{ControlType, Packet, Transport};
+
     use super::*;
 
     #[tokio::test]
@@ -449,5 +508,87 @@ mod tests {
         let f2 = frame_rx.recv().await.unwrap();
         assert_eq!(f2.samples[0], 2);
         assert!(frame_rx.recv().await.is_none());
+    }
+
+    /// When the intent returns an action but `ha_client` is `None`, the orchestrator
+    /// logs a warning and still speaks the confirmation phrase via TTS.
+    #[tokio::test]
+    async fn action_dispatch_no_ha_client_falls_through_to_tts() {
+        // Bind a real local socket pair to capture the packets the orchestrator sends.
+        let server = Transport::bind("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let client = Transport::bind("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let server_addr = server.local_addr().unwrap();
+        let client_addr = client.local_addr().unwrap();
+
+        let (audio_data_tx, audio_data_rx) = mpsc::channel::<AudioData>(64);
+        let stt = Arc::new(SttDispatch::Echo(EchoStt));
+        let tts = Arc::new(TtsDispatch::Echo(EchoTts));
+        // EchoActionIntent returns action + "Done." confirmation phrase
+        let intent = Arc::new(IntentDispatch::EchoAction(EchoActionIntent));
+        let transport = Arc::new(server);
+
+        let pipeline = tokio::spawn(run_pipeline(
+            42,
+            2,
+            audio_data_rx,
+            stt,
+            tts,
+            intent,
+            transport,
+            client_addr,
+            VadConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            None, // no HA client — action is skipped, TTS still fires
+        ));
+
+        // Send a few audio frames then signal end-of-stream
+        for seq in 0u16..3 {
+            audio_data_tx
+                .send(AudioData {
+                    session_id: 42,
+                    sequence: seq,
+                    flags: 0,
+                    timestamp: seq as u32 * 320,
+                    payload: Bytes::from(vec![0u8; 640]),
+                })
+                .await
+                .unwrap();
+        }
+        drop(audio_data_tx);
+
+        // Collect packets: expect StartSpeaking → TTS audio → StopSpeaking
+        let mut got_start_speaking = false;
+        let mut tts_frame_count = 0u16;
+        let mut got_stop_speaking = false;
+
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), client.recv_from()).await {
+                Ok(Ok((Packet::Control(c), addr))) if addr == server_addr => match c.control_type {
+                    ControlType::StartSpeaking => got_start_speaking = true,
+                    ControlType::StopSpeaking => {
+                        got_stop_speaking = true;
+                        break;
+                    }
+                    _ => {}
+                },
+                Ok(Ok((Packet::Audio(_), addr))) if addr == server_addr => {
+                    tts_frame_count += 1;
+                }
+                _ => break,
+            }
+        }
+
+        pipeline.await.unwrap().unwrap();
+
+        // "Done." = 5 chars → EchoTts produces 5 frames
+        assert!(got_start_speaking, "expected StartSpeaking");
+        assert!(got_stop_speaking, "expected StopSpeaking");
+        assert_eq!(tts_frame_count, 5, "expected 5 TTS frames for \"Done.\"");
     }
 }

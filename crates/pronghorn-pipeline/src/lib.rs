@@ -24,7 +24,9 @@ pub use error::PipelineError;
 pub use ha_client::{EntityInfo, HaClient, HaError, StateChange};
 #[cfg(feature = "hassil")]
 pub use hassil::HassylIntent;
-pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};
+pub use intent::{
+    EchoActionIntent, EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse,
+};
 pub use kokoro::KokoroTts;
 pub use ollama::OllamaIntent;
 pub use resample::Resampler;
@@ -90,6 +92,7 @@ impl TextToSpeech for TtsDispatch {
 /// Runtime-dispatched intent backend.
 pub enum IntentDispatch {
     Echo(EchoIntent),
+    EchoAction(EchoActionIntent),
     Ollama(OllamaIntent),
     #[cfg(feature = "hassil")]
     Hassil(HassylIntent),
@@ -101,6 +104,7 @@ impl IntentProcessor for IntentDispatch {
     async fn process(&self, transcript: &str) -> Result<IntentResponse, IntentError> {
         match self {
             Self::Echo(i) => i.process(transcript).await,
+            Self::EchoAction(i) => i.process(transcript).await,
             Self::Ollama(i) => i.process(transcript).await,
             #[cfg(feature = "hassil")]
             Self::Hassil(i) => i.process(transcript).await,

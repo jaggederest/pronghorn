@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use pronghorn_pipeline::{
-    IntentDispatch, SttDispatch, TtsDispatch, VadConfig, create_intent, create_stt, create_tts,
+    HaClient, IntentDispatch, SttDispatch, TtsDispatch, VadConfig, create_intent, create_stt,
+    create_tts,
 };
 use pronghorn_wire::{
     Control, ControlType, Keepalive, PROTOCOL_VERSION, Packet, SessionManager, SessionState,
@@ -30,6 +31,23 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
     info!(backend = ?config.pipeline.tts.backend, "TTS ready");
     let intent = Arc::new(create_intent(&config.pipeline.intent)?);
     info!(backend = ?config.pipeline.intent.backend, "intent ready");
+
+    // Attempt HA connection (optional — HA actions disabled if not configured or unavailable)
+    let ha_client: Option<Arc<HaClient>> = if !config.pipeline.ha.token.is_empty() {
+        match HaClient::connect(&config.pipeline.ha).await {
+            Ok(client) => {
+                info!(url = %config.pipeline.ha.url, "connected to Home Assistant");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                warn!(%e, "failed to connect to Home Assistant, HA actions disabled");
+                None
+            }
+        }
+    } else {
+        debug!("HA token not configured, HA actions disabled");
+        None
+    };
 
     let jitter_delay = config.transport.jitter_buffer_delay;
     let vad_config = config.pipeline.vad.clone();
@@ -63,6 +81,7 @@ pub async fn run_server(config: ServerConfig) -> Result<(), ServerError> {
                     &transport,
                     &mut sessions,
                     &mut handles,
+                    &ha_client,
                 ).await?;
             }
             _ = keepalive_timer.tick() => {
@@ -106,6 +125,7 @@ async fn handle_packet(
     transport: &Arc<Transport>,
     sessions: &mut SessionManager,
     handles: &mut HashMap<u32, SessionHandle>,
+    ha_client: &Option<Arc<HaClient>>,
 ) -> Result<(), ServerError> {
     match packet {
         Packet::Hello(h) => {
@@ -155,6 +175,7 @@ async fn handle_packet(
                             session.remote_addr,
                             jitter_delay,
                             vad_config.clone(),
+                            ha_client.clone(),
                         );
                         handles.insert(ctrl.session_id, handle);
                     }
