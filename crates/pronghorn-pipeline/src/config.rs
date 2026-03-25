@@ -10,6 +10,7 @@ pub struct PipelineConfig {
     pub tts: TtsConfig,
     pub intent: IntentConfig,
     pub vad: VadConfig,
+    pub ha: HaConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -208,6 +209,25 @@ impl Default for OllamaConfig {
             url: "http://localhost:11434".into(),
             model: "gemma3:1b".into(),
             system_prompt: "You are Jarvis, a helpful voice assistant. Keep responses brief and conversational (1-2 sentences).".into(),
+        }
+    }
+}
+
+/// Configuration for the Home Assistant WebSocket client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HaConfig {
+    /// WebSocket URL of the HA instance, e.g. `ws://homeassistant.local:8123/api/websocket`.
+    pub url: String,
+    /// Long-lived access token from HA → Profile → Long-Lived Access Tokens.
+    pub token: String,
+}
+
+impl Default for HaConfig {
+    fn default() -> Self {
+        Self {
+            url: "ws://homeassistant.local:8123/api/websocket".into(),
+            token: String::new(),
         }
     }
 }

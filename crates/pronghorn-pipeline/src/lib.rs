@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod ha_client;
 pub mod intent;
 pub mod kokoro;
 pub mod ollama;
@@ -12,9 +13,11 @@ pub mod vad;
 pub mod whisper;
 
 pub use config::{
-    IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig, SherpaConfig,
-    SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig, VadConfig, WhisperConfig,
+    HaConfig, IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig,
+    SherpaConfig, SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig, VadConfig,
+    WhisperConfig,
 };
+pub use ha_client::{EntityInfo, HaClient, HaError, StateChange};
 pub use error::PipelineError;
 pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};
 pub use kokoro::KokoroTts;
