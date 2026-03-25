@@ -157,17 +157,19 @@ pub async fn run_satellite(
                         server_addr,
                     ).await?;
 
-                    // Send the entire pre-roll buffer. It contains the wake word
-                    // plus any command audio that followed. The wake word text is
-                    // stripped from the transcript on the server side.
+                    // Drain the pre-roll buffer and discard the leading frames that
+                    // contain the wake word. This prevents the wake word from being
+                    // transcribed by STT and echoed back via TTS.
                     sequence = 0;
                     timestamp = 0;
                     let preroll = ring.drain();
+                    let discard = config.audio.wake_word_discard_frames.min(preroll.len());
                     debug!(
                         preroll_frames = preroll.len(),
-                        "sending full pre-roll"
+                        discard_frames = discard,
+                        "sending pre-roll (discarding wake word prefix)"
                     );
-                    for frame in preroll.into_iter() {
+                    for frame in preroll.into_iter().skip(discard) {
                         let pkt = Packet::Audio(AudioData {
                             session_id,
                             sequence,
