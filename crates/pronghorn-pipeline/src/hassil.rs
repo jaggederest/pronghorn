@@ -714,6 +714,7 @@ impl crate::intent::IntentProcessor for HassylIntent {
 }
 
 /// Map a Hassil intent name to `(domain, service)` for HA `call_service`.
+#[cfg(feature = "hassil")]
 fn hassil_intent_to_service(intent: &str) -> (String, String) {
     match intent {
         "HassTurnOn" => ("homeassistant".into(), "turn_on".into()),
