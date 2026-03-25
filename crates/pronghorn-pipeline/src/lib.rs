@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod ha_client;
+pub mod hassil;
 pub mod intent;
 pub mod kokoro;
 pub mod ollama;
@@ -13,12 +14,14 @@ pub mod vad;
 pub mod whisper;
 
 pub use config::{
-    HaConfig, IntentBackend, IntentConfig, KokoroConfig, OllamaConfig, PipelineConfig,
-    SherpaConfig, SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig, VadConfig,
-    WhisperConfig,
+    HaConfig, HassylConfig, IntentBackend, IntentConfig, KokoroConfig, OllamaConfig,
+    PipelineConfig, SherpaConfig, SherpaKokoroConfig, SttBackend, SttConfig, TtsBackend, TtsConfig,
+    VadConfig, WhisperConfig,
 };
-pub use ha_client::{EntityInfo, HaClient, HaError, StateChange};
 pub use error::PipelineError;
+pub use ha_client::{EntityInfo, HaClient, HaError, StateChange};
+#[cfg(feature = "hassil")]
+pub use hassil::HassylIntent;
 pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentResponse};
 pub use kokoro::KokoroTts;
 pub use ollama::OllamaIntent;
@@ -84,6 +87,8 @@ impl TextToSpeech for TtsDispatch {
 pub enum IntentDispatch {
     Echo(EchoIntent),
     Ollama(OllamaIntent),
+    #[cfg(feature = "hassil")]
+    Hassil(HassylIntent),
 }
 
 impl IntentProcessor for IntentDispatch {
@@ -91,6 +96,8 @@ impl IntentProcessor for IntentDispatch {
         match self {
             Self::Echo(i) => i.process(transcript).await,
             Self::Ollama(i) => i.process(transcript).await,
+            #[cfg(feature = "hassil")]
+            Self::Hassil(i) => i.process(transcript).await,
         }
     }
 }
@@ -133,6 +140,15 @@ pub fn create_intent(config: &IntentConfig) -> Result<IntentDispatch, IntentErro
             let intent = OllamaIntent::new(&config.ollama)?;
             Ok(IntentDispatch::Ollama(intent))
         }
+        #[cfg(feature = "hassil")]
+        IntentBackend::Hassil => {
+            let intent = HassylIntent::new(&config.hassil)?;
+            Ok(IntentDispatch::Hassil(intent))
+        }
+        #[cfg(not(feature = "hassil"))]
+        IntentBackend::Hassil => Err(IntentError::Processing(
+            "hassil feature not enabled — rebuild with --features hassil".into(),
+        )),
     }
 }
 

@@ -14,6 +14,7 @@ kokoro = ["dep:kokoroxide"]
 ollama = ["dep:reqwest"]
 sherpa = ["dep:sherpa-rs"]
 ha = ["dep:tokio-tungstenite", "dep:futures-util"]
+hassil = ["dep:serde_yaml"]
 
 [dependencies]
 pronghorn-audio.workspace = true
@@ -35,6 +36,7 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 sherpa-rs = { git = "https://github.com/jaggederest/sherpa-rs", branch = "online-recognizer", version = "0.7.0-pronghorn.1", optional = true, default-features = false, features = ["download-binaries", "tts"] }
 tokio-tungstenite = { version = "0.29", features = ["native-tls"], optional = true }
 futures-util = { version = "0.3", optional = true }
+serde_yaml = { version = "0.9", optional = true }
 
 [dev-dependencies]
 toml.workspace = true

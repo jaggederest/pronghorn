@@ -212,11 +212,7 @@ impl HaClient {
 
     /// Send a request and wait for the matching result message.
     #[cfg(feature = "ha")]
-    async fn request(
-        &self,
-        id: u32,
-        msg: serde_json::Value,
-    ) -> Result<serde_json::Value, HaError> {
+    async fn request(&self, id: u32, msg: serde_json::Value) -> Result<serde_json::Value, HaError> {
         let (tx, rx) = oneshot::channel();
 
         // Register before sending to avoid a race.
@@ -240,7 +236,7 @@ pub(super) mod net {
     use std::collections::HashMap;
 
     use futures_util::{SinkExt, StreamExt};
-    use tokio::sync::{oneshot, Mutex};
+    use tokio::sync::{Mutex, oneshot};
     use tokio_tungstenite::{connect_async, tungstenite::Message};
     use tracing::{debug, info, warn};
 
@@ -329,13 +325,13 @@ pub(super) mod net {
     /// Background dispatch task: routes outbound sends and inbound responses.
     async fn dispatch_loop(
         writer: impl SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error>
-            + Unpin
-            + Send
-            + 'static,
+        + Unpin
+        + Send
+        + 'static,
         mut reader: impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-            + Unpin
-            + Send
-            + 'static,
+        + Unpin
+        + Send
+        + 'static,
         mut cmd_rx: mpsc::Receiver<Command>,
     ) {
         let writer = Arc::new(Mutex::new(writer));
@@ -407,8 +403,10 @@ pub(super) mod net {
                     .unwrap_or(false);
                 if let Some(tx) = pending.lock().await.remove(&id) {
                     let outcome = if success {
-                        let result =
-                            json.get("result").cloned().unwrap_or(serde_json::Value::Null);
+                        let result = json
+                            .get("result")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
                         Ok(result)
                     } else {
                         let err_msg = json
@@ -417,7 +415,10 @@ pub(super) mod net {
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown error")
                             .to_string();
-                        Err(HaError::Request { id, message: err_msg })
+                        Err(HaError::Request {
+                            id,
+                            message: err_msg,
+                        })
                     };
                     let _ = tx.send(outcome);
                 }

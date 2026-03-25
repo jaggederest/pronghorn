@@ -181,6 +181,7 @@ impl Default for KokoroConfig {
 pub struct IntentConfig {
     pub backend: IntentBackend,
     pub ollama: OllamaConfig,
+    pub hassil: HassylConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -189,6 +190,24 @@ pub enum IntentBackend {
     #[default]
     Echo,
     Ollama,
+    /// Deterministic trie-based intent resolution from Hassil YAML templates.
+    Hassil,
+}
+
+/// Configuration for the Hassil trie intent backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HassylConfig {
+    /// Path to the Hassil intent template YAML file.
+    pub template_path: std::path::PathBuf,
+}
+
+impl Default for HassylConfig {
+    fn default() -> Self {
+        Self {
+            template_path: std::path::PathBuf::from("intents/en.yaml"),
+        }
+    }
 }
 
 /// Configuration for the Ollama LLM intent backend.
