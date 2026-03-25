@@ -8,3 +8,6 @@
 .idea/
 .vscode/
 *.log
+/.beads/
+/.claude/
+/.runtime/
