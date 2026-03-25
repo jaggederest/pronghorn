@@ -2551,6 +2551,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sherpa-rs",
+ "strsim",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

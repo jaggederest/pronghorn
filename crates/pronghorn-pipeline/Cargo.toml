@@ -15,6 +15,7 @@ ollama = ["dep:reqwest"]
 sherpa = ["dep:sherpa-rs"]
 ha = ["dep:tokio-tungstenite", "dep:futures-util"]
 hassil = ["dep:serde_yaml"]
+progressive = ["hassil", "dep:strsim"]
 
 [dependencies]
 pronghorn-audio.workspace = true
@@ -37,6 +38,7 @@ sherpa-rs = { git = "https://github.com/jaggederest/sherpa-rs", branch = "online
 tokio-tungstenite = { version = "0.29", features = ["native-tls"], optional = true }
 futures-util = { version = "0.3", optional = true }
 serde_yaml = { version = "0.9", optional = true }
+strsim = { version = "0.11", optional = true }
 
 [dev-dependencies]
 toml.workspace = true

@@ -182,6 +182,7 @@ pub struct IntentConfig {
     pub backend: IntentBackend,
     pub ollama: OllamaConfig,
     pub hassil: HassylConfig,
+    pub progressive: ProgressiveConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -192,6 +193,8 @@ pub enum IntentBackend {
     Ollama,
     /// Deterministic trie-based intent resolution from Hassil YAML templates.
     Hassil,
+    /// Progressive resolver: trie fast path + fuzzy entity matching + LLM fallback.
+    Progressive,
 }
 
 /// Configuration for the Hassil trie intent backend.
@@ -206,6 +209,26 @@ impl Default for HassylConfig {
     fn default() -> Self {
         Self {
             template_path: std::path::PathBuf::from("intents/en.yaml"),
+        }
+    }
+}
+
+/// Configuration for the progressive intent resolver.
+///
+/// The progressive resolver combines the Hassil trie (from `hassil` config) and the
+/// Ollama LLM (from `ollama` config) into a single backend. This section only adds the
+/// extra knob that neither sub-config owns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProgressiveConfig {
+    /// Minimum Jaro-Winkler similarity to accept a fuzzy entity match (0.0–1.0).
+    pub fuzzy_threshold: f64,
+}
+
+impl Default for ProgressiveConfig {
+    fn default() -> Self {
+        Self {
+            fuzzy_threshold: 0.85,
         }
     }
 }

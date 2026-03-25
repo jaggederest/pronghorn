@@ -635,6 +635,37 @@ impl TrieWalker {
 
 // ── HassylIntent: IntentProcessor backed by a compiled trie ──────────────────
 
+/// Load a Hassil YAML template file and compile it into an `Arc<WordTrie>`.
+///
+/// Shared by [`HassylIntent`] and the progressive resolver.
+#[cfg(feature = "hassil")]
+pub(crate) fn load_trie_from_config(
+    config: &crate::config::HassylConfig,
+) -> Result<Arc<WordTrie>, crate::intent::IntentError> {
+    let src = std::fs::read_to_string(&config.template_path).map_err(|e| {
+        crate::intent::IntentError::Processing(format!(
+            "failed to read Hassil template '{}': {}",
+            config.template_path.display(),
+            e
+        ))
+    })?;
+    let file: HassylFile = serde_yaml::from_str(&src).map_err(|e| {
+        crate::intent::IntentError::Processing(format!(
+            "failed to parse Hassil YAML '{}': {}",
+            config.template_path.display(),
+            e
+        ))
+    })?;
+    let trie = WordTrie::from_hassyl_file(&file);
+    tracing::info!(
+        intents = file.intents.len(),
+        path = %config.template_path.display(),
+        "hassil: compiled {} intent(s)",
+        file.intents.len(),
+    );
+    Ok(Arc::new(trie))
+}
+
 /// Intent processor that resolves utterances against Hassil YAML templates.
 ///
 /// Requires the `hassil` feature (enables `serde_yaml` parsing).
@@ -648,30 +679,8 @@ pub struct HassylIntent {
 impl HassylIntent {
     /// Load a Hassil YAML template file and compile it into a `WordTrie`.
     pub fn new(config: &crate::config::HassylConfig) -> Result<Self, crate::intent::IntentError> {
-        let src = std::fs::read_to_string(&config.template_path).map_err(|e| {
-            crate::intent::IntentError::Processing(format!(
-                "failed to read Hassil template '{}': {}",
-                config.template_path.display(),
-                e
-            ))
-        })?;
-        let file: HassylFile = serde_yaml::from_str(&src).map_err(|e| {
-            crate::intent::IntentError::Processing(format!(
-                "failed to parse Hassil YAML '{}': {}",
-                config.template_path.display(),
-                e
-            ))
-        })?;
-        let trie = WordTrie::from_hassyl_file(&file);
-        tracing::info!(
-            intents = file.intents.len(),
-            "hassil: compiled {} intent(s) from '{}'",
-            file.intents.len(),
-            config.template_path.display()
-        );
-        Ok(Self {
-            trie: Arc::new(trie),
-        })
+        let trie = load_trie_from_config(config)?;
+        Ok(Self { trie })
     }
 }
 
@@ -715,7 +724,7 @@ impl crate::intent::IntentProcessor for HassylIntent {
 
 /// Map a Hassil intent name to `(domain, service)` for HA `call_service`.
 #[cfg(feature = "hassil")]
-fn hassil_intent_to_service(intent: &str) -> (String, String) {
+pub(crate) fn hassil_intent_to_service(intent: &str) -> (String, String) {
     match intent {
         "HassTurnOn" => ("homeassistant".into(), "turn_on".into()),
         "HassTurnOff" => ("homeassistant".into(), "turn_off".into()),

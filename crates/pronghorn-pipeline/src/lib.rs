@@ -6,6 +6,8 @@ pub mod intent;
 pub mod kokoro;
 pub mod ollama;
 pub mod resample;
+#[cfg(feature = "progressive")]
+pub mod resolver;
 pub mod sherpa;
 pub mod sherpa_tts;
 pub mod stt;
@@ -26,6 +28,8 @@ pub use intent::{EchoIntent, IntentAction, IntentError, IntentProcessor, IntentR
 pub use kokoro::KokoroTts;
 pub use ollama::OllamaIntent;
 pub use resample::Resampler;
+#[cfg(feature = "progressive")]
+pub use resolver::{EntityIndex, ProgressiveResolver};
 pub use sherpa::SherpaStt;
 pub use sherpa_tts::SherpaTts;
 pub use stt::{EchoStt, SpeechToText, SttError, Transcript};
@@ -89,6 +93,8 @@ pub enum IntentDispatch {
     Ollama(OllamaIntent),
     #[cfg(feature = "hassil")]
     Hassil(HassylIntent),
+    #[cfg(feature = "progressive")]
+    Progressive(ProgressiveResolver),
 }
 
 impl IntentProcessor for IntentDispatch {
@@ -98,6 +104,8 @@ impl IntentProcessor for IntentDispatch {
             Self::Ollama(i) => i.process(transcript).await,
             #[cfg(feature = "hassil")]
             Self::Hassil(i) => i.process(transcript).await,
+            #[cfg(feature = "progressive")]
+            Self::Progressive(i) => i.process(transcript).await,
         }
     }
 }
@@ -133,6 +141,9 @@ pub fn create_tts(config: &TtsConfig) -> Result<TtsDispatch, TtsError> {
 }
 
 /// Create an intent backend from config.
+///
+/// For the `progressive` backend, entities start empty (raw slot values pass through).
+/// Call [`create_progressive_intent`] with pre-fetched entities for live fuzzy matching.
 pub fn create_intent(config: &IntentConfig) -> Result<IntentDispatch, IntentError> {
     match config.backend {
         IntentBackend::Echo => Ok(IntentDispatch::Echo(EchoIntent)),
@@ -149,7 +160,32 @@ pub fn create_intent(config: &IntentConfig) -> Result<IntentDispatch, IntentErro
         IntentBackend::Hassil => Err(IntentError::Processing(
             "hassil feature not enabled — rebuild with --features hassil".into(),
         )),
+        #[cfg(feature = "progressive")]
+        IntentBackend::Progressive => {
+            let intent = ProgressiveResolver::from_config(config, vec![])?;
+            Ok(IntentDispatch::Progressive(intent))
+        }
+        #[cfg(not(feature = "progressive"))]
+        IntentBackend::Progressive => Err(IntentError::Processing(
+            "progressive feature not enabled — rebuild with --features progressive".into(),
+        )),
     }
+}
+
+/// Create a progressive intent resolver with pre-fetched HA entities.
+///
+/// Use this when a live [`HaClient`] is available at server startup:
+/// ```rust,ignore
+/// let entities = ha_client.entities().await?;
+/// let intent = Arc::new(create_progressive_intent(&config.pipeline.intent, entities)?);
+/// ```
+#[cfg(feature = "progressive")]
+pub fn create_progressive_intent(
+    config: &IntentConfig,
+    entities: Vec<EntityInfo>,
+) -> Result<IntentDispatch, IntentError> {
+    let intent = ProgressiveResolver::from_config(config, entities)?;
+    Ok(IntentDispatch::Progressive(intent))
 }
 
 #[cfg(test)]
